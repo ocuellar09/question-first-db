@@ -1,0 +1,123 @@
+{
+  "title": "Clientes recurrentes inactivos más 60 días",
+  "text": "De los clientes que compraron más de una vez, ¿cuáles llevan más de 60 días sin volver?",
+  "keywords": [
+    "clientes recurrentes",
+    "inactividad",
+    "retención",
+    "recompra"
+  ],
+  "entities": [
+    {
+      "id": "customers",
+      "label": "customers",
+      "subtitle": "Compradores registrados",
+      "status": "existing",
+      "col": 1,
+      "row": 1,
+      "columns": [
+        "id",
+        "email",
+        "full_name",
+        "phone",
+        "is_active"
+      ]
+    },
+    {
+      "id": "orders",
+      "label": "orders",
+      "subtitle": "Pedidos por cliente",
+      "status": "existing",
+      "col": 2,
+      "row": 1,
+      "columns": [
+        "id",
+        "customer_id",
+        "status",
+        "created_at"
+      ]
+    },
+    {
+      "id": "orders_status_design",
+      "label": "orders.status",
+      "subtitle": "Estado sin ENUM validado",
+      "status": "design",
+      "col": 3,
+      "row": 1,
+      "columns": [
+        "status (texto libre, sin CHECK constraint)"
+      ]
+    },
+    {
+      "id": "customer_metrics",
+      "label": "customer_metrics",
+      "subtitle": "Scoring RFM / recencia (falta)",
+      "status": "missing",
+      "col": 4,
+      "row": 1,
+      "columns": [
+        "customer_id",
+        "last_order_date",
+        "order_count",
+        "recency_days",
+        "rfm_score"
+      ]
+    },
+    {
+      "id": "order_status_history",
+      "label": "order_status_history",
+      "subtitle": "Historial de estados (falta)",
+      "status": "missing",
+      "col": 2,
+      "row": 2,
+      "columns": [
+        "order_id",
+        "previous_status",
+        "new_status",
+        "changed_at"
+      ]
+    },
+    {
+      "id": "discounts",
+      "label": "discounts",
+      "subtitle": "Cupones de reactivación (falta)",
+      "status": "missing",
+      "col": 4,
+      "row": 2,
+      "columns": [
+        "id",
+        "customer_id",
+        "code",
+        "discount_pct",
+        "expires_at"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "customers",
+      "to": "orders"
+    },
+    {
+      "from": "orders",
+      "to": "orders_status_design"
+    },
+    {
+      "from": "customers",
+      "to": "customer_metrics"
+    },
+    {
+      "from": "orders",
+      "to": "order_status_history"
+    },
+    {
+      "from": "customer_metrics",
+      "to": "discounts"
+    }
+  ],
+  "sql": "SELECT\n  c.id                          AS customer_id,\n  c.full_name,\n  c.email,\n  COUNT(o.id)                   AS total_orders,\n  MAX(o.created_at)             AS last_order_date,\n  CURRENT_DATE - MAX(o.created_at)::date AS days_since_last_order\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nWHERE c.is_active = TRUE\n  -- excluir órdenes canceladas para no contar como \"compra real\"\n  AND o.status NOT IN ('cancelled')\nGROUP BY c.id, c.full_name, c.email\nHAVING\n  COUNT(o.id) > 1\n  AND CURRENT_DATE - MAX(o.created_at)::date > 60\nORDER BY days_since_last_order DESC;",
+  "translation": "Buscamos clientes que ya nos compraron al menos dos veces, pero cuya última compra fue hace más de 60 días. Son compradores que conocen la tienda y podrían volver, pero algo los frenó. Identificarlos nos permite lanzar acciones de reactivación antes de perderlos definitivamente.",
+  "designDecision": "Crear la tabla `customer_metrics` con campos de recencia, frecuencia y valor monetario (RFM) actualizada periódicamente. También agregar `order_status_history` para distinguir órdenes completadas de canceladas sin depender de texto libre en `orders.status`.",
+  "plainSummary": "La consulta encuentra clientes que compraron más de una vez pero no han regresado en los últimos 60 días. Hoy podemos calcularlo, pero el resultado puede ser impreciso porque los estados de las órdenes son texto libre y podrían incluir cancelaciones mal etiquetadas. Contar con un historial de métricas por cliente haría este análisis más confiable y rápido.",
+  "concreteExample": "Laura Méndez hizo su primera compra el 1 de marzo y una segunda el 5 de abril. Hoy, 20 de junio, llevan 76 días desde su última orden. Laura aparece en el resultado con total_orders=2 y days_since_last_order=76, siendo una candidata ideal para recibir un cupón de reactivación del 10%."
+}

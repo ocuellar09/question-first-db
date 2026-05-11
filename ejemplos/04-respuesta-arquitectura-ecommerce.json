@@ -1,0 +1,33 @@
+{
+  "summary": "La decisión crítica es materializar métricas de recencia (customer_metrics) como tabla persistida con snapshots históricos, ya que es el núcleo del análisis de churn y del entrenamiento de modelos predictivos; sin historia de recency_days no hay forma de entrenar ni validar un modelo de reactivación.",
+  "items": [
+    {
+      "entityId": "orders_status_design",
+      "recommendation": "new_rule",
+      "reasoning": "Agregar un CHECK constraint o cambiar a ENUM en PostgreSQL es una regla de integridad, no una tabla nueva; sin esto, los filtros por status='delivered' o 'cancelled' son no confiables y contaminan cualquier feature de comportamiento de compra.",
+      "mlRelevance": "useful",
+      "mlContext": "Modelo de clasificación de churn: el estado final de los pedidos es un feature secundario para distinguir clientes que completaron compras reales vs. abandonos o cancelaciones."
+    },
+    {
+      "entityId": "customer_metrics",
+      "recommendation": "snapshot",
+      "reasoning": "last_order_date y recency_days deben persistirse en tabla append-only con timestamps porque la pregunta de negocio exige comparar clientes en un momento dado (>60 días), y sin historia no se puede entrenar un modelo que prediga cuándo un cliente está a punto de abandonar antes de que pasen los 60 días.",
+      "mlRelevance": "critical",
+      "mlContext": "Modelo de clasificación binaria de churn (cliente reactivable vs. perdido): recency_days, order_count y rfm_score son el target y los features primarios; sin snapshots históricos no existe training data temporal."
+    },
+    {
+      "entityId": "order_status_history",
+      "recommendation": "snapshot",
+      "reasoning": "El historial de transiciones de estado es un audit trail append-only que permite calcular tiempos entre estados (e.g., tiempo de entrega, tiempo en 'paid' antes de 'shipped'); eliminar esta historia es irrecuperable y bloquea análisis de fricción operacional.",
+      "mlRelevance": "useful",
+      "mlContext": "Modelo de regresión de satisfacción o predicción de devoluciones: los tiempos entre estados (paid→shipped→delivered) son features de experiencia de entrega que correlacionan con recompra."
+    },
+    {
+      "entityId": "discounts",
+      "recommendation": "materialize",
+      "reasoning": "Los cupones de reactivación son entidades de negocio con ciclo de vida propio (creación, uso, expiración) que disparan eventos concretos; deben persistirse como tabla con estado actual para poder medir si el descuento efectivamente reactivó al cliente.",
+      "mlRelevance": "useful",
+      "mlContext": "Modelo de uplift (clasificación causal) para campañas de reactivación: saber qué clientes recibieron cupón y cuáles recompraron permite estimar el efecto incremental del descuento vs. recompra orgánica."
+    }
+  ]
+}

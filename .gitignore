@@ -1,0 +1,29 @@
+# Secrets — NUNCA commitear
+local-config.js
+*.env
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+._*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node (por si alguien agrega tooling)
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema
+Thumbs.db

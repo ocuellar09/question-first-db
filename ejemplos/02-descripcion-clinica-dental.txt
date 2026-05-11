@@ -1,0 +1,20 @@
+Pegar esto en el tab "Descripción libre" del modal "Mi BD"
+========================================================
+
+Tenemos una BD para una clínica dental.
+
+Tabla "patients": guarda cada paciente con id, nombre completo, teléfono, fecha de nacimiento, género (M/F/otro), email, fecha de primer registro, y un flag is_active.
+
+Tabla "doctors": cada doctor con id, nombre, especialidad (general, ortodoncia, endodoncia, periodoncia, cirugía), licencia profesional, fecha de ingreso a la clínica.
+
+Tabla "appointments": cada cita con id, patient_id (FK a patients), doctor_id (FK a doctors), scheduled_at (fecha y hora), duration_minutes, treatment_type (texto libre con cosas como "limpieza", "ortodoncia control", "endodoncia", "cirugía"), status ("scheduled", "completed", "cancelled", "no_show"), notes (texto libre del doctor), created_at.
+
+Tabla "treatments": cada tratamiento completado con id, appointment_id (FK), description, cost, completed_at. Un appointment puede generar varios treatments (ej: una cita de limpieza + flúor).
+
+Tabla "payments": id, patient_id (FK), amount, method ("cash", "card", "transfer", "insurance"), paid_at, treatment_id (opcional, FK a treatments).
+
+Tabla "clinical_notes": id, patient_id (FK), appointment_id (FK opcional), note_text (TEXTO LIBRE largo donde el doctor escribe todo lo que observa), doctor_id, created_at.
+
+Tabla "prescriptions": id, patient_id (FK), doctor_id (FK), medication_name, dosage, duration_days, notes, prescribed_at.
+
+NO tenemos: recordatorios automáticos enviados, scoring de riesgo de no-show, agrupación por cohorte (cuándo entró el paciente), seguro médico estructurado, historial de comunicaciones (SMS/WhatsApp/email), satisfaction surveys, ni reviews públicos.
