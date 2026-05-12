@@ -1678,45 +1678,102 @@ REGLAS:
       },
     ];
 
-    const HowItWorks = () => (
-      <div className="mt-10 sm:mt-12">
-        <div className="text-center mb-8">
-          <div className="inline-block px-3 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-[10px] font-bold text-zinc-400 tracking-widest mb-3">CÓMO USARLA · 4 PASOS</div>
-          <h2 className="text-2xl sm:text-3xl font-black text-white">De la pregunta al roadmap, en 4 pasos</h2>
-        </div>
-        <div className="grid sm:grid-cols-2 gap-4 sm:gap-5">
-          {HOW_IT_WORKS_STEPS.map((s, i) => {
-            const c = STEP_COLOR_CLASSES[s.color];
-            const Illustration = s.Illustration;
-            return (
-              <div
-                key={s.n}
-                className={`relative bg-zinc-950/60 border ${c.accent} rounded-2xl p-5 sm:p-6 fade-in-up ring-1 ${c.ring} shadow-lg ${c.glow} flex flex-col`}
-                style={{ animationDelay: `${i * 0.12}s` }}
-              >
-                <div className="flex items-start gap-3 mb-3">
-                  <div className={`w-10 h-10 rounded-full ${c.nbg} ${c.text} flex items-center justify-center font-black text-lg flex-shrink-0 ring-2 ${c.ring}`}>{s.n}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className={`text-[10px] font-bold tracking-widest ${c.text} mb-1`}>PASO {s.n}</div>
-                    <div className="text-lg sm:text-xl font-bold text-white leading-tight">{s.title}</div>
-                  </div>
+    // WelcomeTour — modal de bienvenida con 4 pasos navegables.
+    // Aparece la 1ra vez (localStorage flag). Cerrable con X / "Saltar" / clic fuera.
+    // Reabrible desde el botón "?" en el header.
+    const WelcomeTour = ({ onClose }) => {
+      const [step, setStep] = useState(0);
+      const total = HOW_IT_WORKS_STEPS.length;
+      const s = HOW_IT_WORKS_STEPS[step];
+      const c = STEP_COLOR_CLASSES[s.color];
+      const Illustration = s.Illustration;
+      const isLast = step === total - 1;
+
+      return (
+        <div
+          className="fixed inset-0 bg-black/85 backdrop-blur-sm z-[60] flex items-center justify-center p-4 fade-in-up"
+          onClick={onClose}
+        >
+          <div
+            className={`bg-zinc-950 border-2 ${c.accent} rounded-3xl w-full max-w-xl overflow-hidden shadow-2xl ${c.glow}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header: dots de progreso + botón cerrar */}
+            <div className="flex items-center justify-between px-5 sm:px-6 pt-5">
+              <div className="flex items-center gap-1.5">
+                {HOW_IT_WORKS_STEPS.map((_, i) => {
+                  const dotColor = STEP_COLOR_CLASSES[HOW_IT_WORKS_STEPS[i].color];
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => setStep(i)}
+                      className={`h-1.5 rounded-full transition-all ${i === step ? `w-8 ${dotColor.text.replace('text-', 'bg-')}` : "w-1.5 bg-zinc-700 hover:bg-zinc-500"}`}
+                      aria-label={`Ir al paso ${i + 1}`}
+                    />
+                  );
+                })}
+              </div>
+              <button onClick={onClose} className="text-zinc-500 hover:text-white text-2xl leading-none w-8 h-8 flex items-center justify-center" aria-label="Cerrar">×</button>
+            </div>
+
+            {/* Body: paso actual */}
+            <div className="px-5 sm:px-8 pt-5 pb-2 fade-in-up" key={step}>
+              <div className="flex items-center gap-3 mb-4">
+                <div className={`w-12 h-12 rounded-full ${c.nbg} ${c.text} flex items-center justify-center font-black text-xl flex-shrink-0 ring-2 ${c.ring}`}>{s.n}</div>
+                <div className="flex-1 min-w-0">
+                  <div className={`text-[10px] font-bold tracking-widest ${c.text} mb-1`}>PASO {s.n} DE {total}</div>
+                  <div className="text-2xl font-bold text-white leading-tight">{s.title}</div>
                 </div>
-                <p className="text-sm text-zinc-200 leading-relaxed">{s.desc}</p>
-                <p className="text-xs text-zinc-400 leading-relaxed mt-2 italic">{s.reassurance}</p>
-                <Illustration c={c} />
-                {s.cta && (
-                  s.ctaUrl
-                    ? <a href={s.ctaUrl} target="_blank" rel="noopener" className={`mt-3 text-xs ${c.text} hover:underline inline-flex items-center gap-1 transition-colors`}>
-                        {s.cta} <span aria-hidden>→</span>
-                      </a>
-                    : <div className="mt-3 text-xs text-zinc-500">{s.cta}</div>
+              </div>
+              <p className="text-base text-zinc-100 leading-relaxed">{s.desc}</p>
+              <p className="text-sm text-zinc-400 leading-relaxed mt-2 italic">{s.reassurance}</p>
+              <Illustration c={c} />
+              {s.cta && (
+                s.ctaUrl
+                  ? <a href={s.ctaUrl} target="_blank" rel="noopener" className={`mt-4 text-xs ${c.text} hover:underline inline-flex items-center gap-1 transition-colors`}>
+                      {s.cta} <span aria-hidden>→</span>
+                    </a>
+                  : <div className="mt-4 text-xs text-zinc-500">{s.cta}</div>
+              )}
+            </div>
+
+            {/* Footer: navegación */}
+            <div className="px-5 sm:px-6 py-4 mt-2 border-t border-zinc-800 flex items-center justify-between gap-3">
+              <button
+                onClick={onClose}
+                className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+              >
+                Saltar el tour
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setStep((p) => Math.max(0, p - 1))}
+                  disabled={step === 0}
+                  className={`text-sm px-4 py-2 rounded-lg border transition-colors ${step === 0 ? "border-zinc-900 text-zinc-700 cursor-not-allowed" : "border-zinc-700 text-zinc-300 hover:border-zinc-500 hover:text-white"}`}
+                >
+                  ← Anterior
+                </button>
+                {!isLast ? (
+                  <button
+                    onClick={() => setStep((p) => Math.min(total - 1, p + 1))}
+                    className={`text-sm font-bold px-5 py-2 rounded-lg ${c.nbg} ${c.text} border ${c.accent} hover:brightness-110 transition-all`}
+                  >
+                    Siguiente →
+                  </button>
+                ) : (
+                  <button
+                    onClick={onClose}
+                    className="text-sm font-bold px-5 py-2 rounded-lg bg-emerald-500 text-zinc-950 hover:bg-emerald-400 transition-colors"
+                  >
+                    Empezar ✓
+                  </button>
                 )}
               </div>
-            );
-          })}
+            </div>
+          </div>
         </div>
-      </div>
-    );
+      );
+    };
 
     const LandingScreen = ({ activeSchema, apiKey, isAnalyzing, analyzeError, onAnalyze, onRequestKey, onPickQuestion }) => (
       <div className="fade-in-up">
@@ -1738,8 +1795,6 @@ REGLAS:
             "El SQL es la última decisión, no la primera."
           </p>
         </div>
-
-        {!activeSchema && <HowItWorks />}
 
         <div className="mt-10">
           <FreeQuestionInput
@@ -2139,6 +2194,13 @@ REGLAS:
       const [liveVisualization, setLiveVisualization] = useState(null);
       const [isAnalyzingViz, setIsAnalyzingViz] = useState(false);
       const [vizError, setVizError] = useState(null);
+      const [showTour, setShowTour] = useState(() => {
+        try { return !localStorage.getItem("claude_qfdb_tour_seen"); } catch { return true; }
+      });
+      const closeTour = () => {
+        setShowTour(false);
+        try { localStorage.setItem("claude_qfdb_tour_seen", "1"); } catch {}
+      };
 
       const revealTimers = useRef([]);
       const clearRevealTimers = () => {
@@ -2291,6 +2353,12 @@ REGLAS:
               </div>
               <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
                 <button
+                  onClick={() => setShowTour(true)}
+                  className="text-xs text-zinc-400 hover:text-white border border-zinc-800 hover:border-zinc-600 rounded-full w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center transition-colors font-bold"
+                  title="¿Cómo funciona? — Reabrir el tour guiado"
+                  aria-label="Reabrir tour"
+                >?</button>
+                <button
                   onClick={() => setShowSchemaModal(true)}
                   className="text-xs text-emerald-300 hover:text-emerald-200 border border-emerald-500/30 hover:border-emerald-500/60 rounded-full px-2.5 sm:px-3 py-1.5 transition-colors flex items-center gap-1.5"
                   title="Cargar el esquema de tu BD (DDL, texto o imagen)"
@@ -2377,6 +2445,8 @@ REGLAS:
               error={schemaError}
             />
           )}
+
+          {showTour && <WelcomeTour onClose={closeTour} />}
 
           <footer className="border-t border-zinc-900 mt-16 py-6">
             <div className="max-w-7xl mx-auto px-6 text-center text-xs text-zinc-600 space-y-1.5">
