@@ -2,6 +2,14 @@
 
 > Una webapp didáctica para enseñar diseño de bases de datos partiendo de **preguntas de negocio reales** — no de tablas.
 
+<p align="center">
+  <a href="https://ocuellar09.github.io/question-first-db/">
+    <img src="docs/demo.gif" alt="Demo de 10 segundos del flujo: pregunta → cajas verde/amarillo/rojo → traducción gerencial → arquitectura recomendada con lente ML" width="820" />
+  </a>
+  <br />
+  <sub><strong>▶ Abrir la app en vivo:</strong> <a href="https://ocuellar09.github.io/question-first-db/">ocuellar09.github.io/question-first-db</a></sub>
+</p>
+
 **Para quién**: arquitectos, product managers, dueños de producto, equipos no-técnicos que necesitan entender por qué su BD responde unas preguntas y no otras.
 
 **El método** que enseña en 4 pasos:
