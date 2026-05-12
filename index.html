@@ -1593,10 +1593,9 @@ REGLAS:
     // LandingScreen — pantalla inicial (sin pregunta seleccionada)
     // Hero + input libre + grid de preguntas pre-cargadas
     // ============================================================
-    // ============================================================
-    // HowItWorks — onboarding accionable estilo Linear/Claude
-    // 4 pasos grandes con badge "PASO N", copy de confianza
-    // y mini-ilustración inline por paso
+    // Tour de bienvenida — 4 pasos con badge "PASO N", copy de confianza
+    // y mini-ilustración inline por paso. Se presenta como modal navegable
+    // (WelcomeTour) la primera vez que el usuario visita el sitio.
     // ============================================================
     const STEP_COLOR_CLASSES = {
       amber:   { ring: "ring-amber-500/30",   text: "text-amber-300",   nbg: "bg-amber-500/15",   accent: "border-amber-500/50",   glow: "shadow-amber-500/10"   },
