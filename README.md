@@ -15,7 +15,7 @@
 
 ## Qué hace la app
 
-- **5 preguntas pre-cargadas** sobre una BD de coaching (zona-ai) con animación paso a paso
+- **5 preguntas pre-cargadas** en 5 dominios distintos (e-commerce, SaaS, edtech, healthtech, CRM) con animación paso a paso
 - **Análisis en vivo**: escribes una pregunta de negocio cualquiera y Claude la descompone
 - **Esquema custom**: pega tu DDL/SQL, descripción libre, o sube **imagen de tu ERD** (Claude Vision) → la app aprende tu BD y responde preguntas sobre ella
 - **5 capas de respuesta por pregunta**:
@@ -65,18 +65,10 @@ Crea una gratis en [console.anthropic.com/settings/keys](https://console.anthrop
 ├── LICENSE                          # MIT
 ├── .gitignore
 │
-├── docs/                            # Material complementario del taller
-│   ├── 01-diagrama-pregunta-uno.md  # ERD Mermaid + layout ASCII de la pregunta seed
-│   ├── 02-guion-15min.md            # Script narrado de los primeros 15 min del taller
-│   └── 03-queries-en-vivo.sql       # Queries postgres ejecutables
-│
-├── ejemplos/                        # Schemas de prueba + respuestas reales de Claude
-│   ├── 01-ddl-ecommerce.sql         # Para probar el tab "DDL/SQL"
-│   ├── 02-descripcion-clinica-dental.txt  # Para probar el tab "Descripción"
-│   └── *.json                       # Respuestas reales de Claude como referencia
-│
-└── versions/                        # Versiones anteriores (histórico)
-    └── v1-pre-architecture-ml.html
+└── ejemplos/                        # Schemas de prueba + respuestas reales de Claude
+    ├── 01-ddl-ecommerce.sql         # Pegá esto en el tab "DDL/SQL" para probar
+    ├── 02-descripcion-clinica-dental.txt  # Pegá esto en el tab "Descripción"
+    └── *.json                       # Respuestas reales de Claude como referencia (qué shape devuelve por cada capa)
 ```
 
 ---
@@ -155,7 +147,7 @@ Este código fue auditado contra patrones típicos de vibe-coding (45% del códi
 | Acción | Qué se envía |
 |--------|--------------|
 | Click pregunta pre-cargada | Nada nuevo — todo es local |
-| Escribir pregunta libre + Analizar | El texto de tu pregunta + el system prompt con schema (zona-ai o tu BD custom procesada) |
+| Escribir pregunta libre + Analizar | El texto de tu pregunta + el system prompt con el knowledge base activo (genérico multi-dominio o tu BD custom procesada) |
 | "Mi BD" → procesar DDL/descripción/imagen | El contenido pegado/subido tal cual, sin filtros |
 | Click "¿Guardar o calcular?" sobre una pregunta libre | Las entidades + el texto de la pregunta |
 | Click "Dashboard imaginado" sobre una pregunta libre | Las entidades + el texto de la pregunta |
@@ -193,14 +185,15 @@ NO es el caso de uso correcto. Esta app está diseñada para taller didáctico y
 
 ---
 
-## Para usar en un taller
+## Usarla en un taller o sesión de discovery
 
-1. Antes del taller: corre `index.html` en local, configura tu key una vez
-2. Si el cliente te comparte su BD en vivo: copia su DDL al tab "DDL/SQL" del modal "Mi BD" → procesar (~15s) → ya queda activa
-3. Si te trae screenshot del ERD: subes la imagen al tab "Imagen del ERD" → Claude Vision lo parsea
-4. El cliente trae sus preguntas → las escribes en el input "EN VIVO" → animación + 5 capas de análisis
+El caso de uso típico: un consultor / arquitecto / product manager guía a un equipo cliente para descubrir qué responde y qué NO responde su base de datos.
 
-Lee `docs/02-guion-15min.md` para el script narrado de los primeros 15 minutos.
+1. Antes de la sesión: configura tu key una vez (modal "API key" del header)
+2. Empieza por una pre-cargada para mostrar el método con un dominio que todos entienden (e-commerce funciona bien para arrancar)
+3. Cuando el cliente esté listo, click **"Mi BD"** en el header → pega el DDL del cliente (o sube un screenshot del ERD via Vision) → procesa (~15s) → la app ahora razona sobre LA BD del cliente
+4. El cliente trae sus preguntas → las escribes en el input **"EN VIVO"** → animación + 5 capas de análisis
+5. Después de cada pregunta, click **"¿Guardar o calcular?"** para tener la conversación arquitectónica y de ML que vende el roadmap
 
 ---
 

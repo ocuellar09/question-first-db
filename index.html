@@ -184,312 +184,288 @@
     // ============================================================
     const QUESTIONS = [
       {
-        id: "q1-seed",
-        title: "Pregunta 1 — La seed",
-        text: "De los coachees que iniciaron el programa con MIA, ¿cómo va el avance de cada uno?",
-        keywords: ["coachees", "iniciaron", "programa", "avance"],
+        id: "q1-ecommerce-top-customers",
+        title: "Pregunta 1 — Top clientes (e-commerce)",
+        text: "¿Quiénes son los 10 clientes que más han gastado este año?",
+        keywords: ["clientes", "más", "gastado", "año"],
         entities: [
-          { id: "tenants",            label: "tenants",              subtitle: "slug='mia'",            status: "existing", col: 1, row: 1, columns: ["id", "slug", "name"] },
-          { id: "courses",            label: "courses",              subtitle: "el programa",            status: "existing", col: 2, row: 1, columns: ["id", "tenant_id", "title", "is_active"] },
-          { id: "course_enrollments", label: "course_enrollments",   subtitle: "cada coachee",           status: "existing", col: 3, row: 1, columns: ["id", "course_id", "student_phone", "status", "enrolled_at"] },
-          { id: "course_modules",     label: "course_modules",       subtitle: "los módulos",            status: "existing", col: 2, row: 2, columns: ["id", "course_id", "order", "module_type"] },
-          { id: "student_progress",   label: "student_progress",     subtitle: "avance por módulo",      status: "existing", col: 3, row: 2, columns: ["enrollment_id", "module_id", "status", "completed_at"] },
-          { id: "conversation_insights", label: "conversation_insights", subtitle: "avance NARRATIVO", status: "design",   col: 4, row: 2, columns: ["enrollment_id", "comprehension_level (low|mid|high)", "evolution_notes (TEXTO)"] },
+          { id: "customers",         label: "customers",        subtitle: "registro de clientes",      status: "existing", col: 1, row: 1, columns: ["id PK", "email UNIQUE", "full_name", "created_at"] },
+          { id: "orders",            label: "orders",           subtitle: "cada pedido",               status: "existing", col: 2, row: 1, columns: ["id PK", "customer_id FK", "status", "total DECIMAL", "created_at"] },
+          { id: "order_items",       label: "order_items",      subtitle: "detalle del pedido",        status: "existing", col: 3, row: 1, columns: ["order_id FK", "product_id FK", "quantity", "unit_price"] },
+          { id: "customer_metrics",  label: "customer_metrics", subtitle: "LTV calculado runtime",     status: "design",   col: 2, row: 2, columns: ["total_spent (RUNTIME, no persistido)", "order_count (RUNTIME)", "last_order_at"] },
         ],
         connections: [
-          { from: "tenants", to: "courses" },
-          { from: "courses", to: "course_enrollments" },
-          { from: "courses", to: "course_modules" },
-          { from: "course_enrollments", to: "student_progress" },
-          { from: "course_modules", to: "student_progress" },
-          { from: "course_enrollments", to: "conversation_insights" },
+          { from: "customers", to: "orders" },
+          { from: "orders",    to: "order_items" },
+          { from: "customers", to: "customer_metrics" },
         ],
         sql:
 `SELECT
-  ce.student_name,
-  ce.enrolled_at,
-  c.title AS programa,
-  COUNT(sp.id) FILTER (WHERE sp.status='completed') AS modulos_completados,
-  COUNT(cm.id) AS modulos_totales,
-  ROUND(100.0 * COUNT(sp.id) FILTER (WHERE sp.status='completed')
-        / NULLIF(COUNT(cm.id),0), 1) AS pct_avance
-FROM course_enrollments ce
-JOIN tenants t         ON t.id = ce.tenant_id
-JOIN courses c         ON c.id = ce.course_id
-JOIN course_modules cm ON cm.course_id = c.id
-LEFT JOIN student_progress sp
-       ON sp.enrollment_id = ce.id
-      AND sp.module_id    = cm.id
-WHERE t.slug = 'mia' AND ce.status = 'active'
-GROUP BY ce.id, c.id
-ORDER BY pct_avance DESC NULLS LAST;`,
-        translation: "MIA te dice exactamente quién va en qué módulo y qué porcentaje completó. La parte AMARILLA — el avance como concepto profundo — vive como narrativa en conversation_insights. No es un número del 1 al 10, es texto enriquecido. Si quieres KPI numérico, hay que diseñarlo. Es decisión de producto, no falla técnica.",
-        designDecision: "MIA cuenta historia, no calcula KPI. Para tener scoring numérico hay que agregar columnas estructuradas (ej. progress_score INT, goal_alignment DECIMAL) a conversation_insights.",
-        plainSummary: "Para responder esto MIA necesita saber 4 cosas: QUIÉN es cada coachee, EN QUÉ programa está, QUÉ módulos lleva completados, y QUÉ tan profunda ha sido la conversación. Las 3 primeras las tiene como datos duros (verde). La cuarta vive como notas escritas, no como un puntaje (amarillo).",
-        concreteExample: "Ejemplo concreto: 'María Gómez, programa Liderazgo Consciente, lleva 4 de 7 módulos completados, último acceso ayer. En notas: \"María mostró un click importante al hablar de delegar — necesita más práctica en feedback directo\".'",
+  c.id, c.full_name, c.email,
+  SUM(o.total)    AS total_gastado,
+  COUNT(o.id)     AS num_pedidos
+FROM customers c
+JOIN orders o ON o.customer_id = c.id
+WHERE o.status NOT IN ('cancelled', 'refunded')
+  AND o.created_at >= DATE_TRUNC('year', CURRENT_DATE)
+GROUP BY c.id
+ORDER BY total_gastado DESC
+LIMIT 10;`,
+        translation: "El sistema PUEDE sumar todos los pedidos válidos de cada cliente y ordenar. Funciona. La parte amarilla: si quieres ver la evolución del LTV mes a mes, NO la tienes — solo el valor de hoy. Con 1M clientes el query se vuelve lento sin materializar.",
+        designDecision: "Materializar customer_metrics (total_spent, order_count, last_order_at) + snapshot mensual para tendencia y modelos de churn.",
+        plainSummary: "Para responder esto el sistema necesita: la lista de clientes, sus órdenes válidas, y la suma de cada orden. Las 3 cosas están. Lo amarillo: si tienes 1M clientes el reporte tarda porque suma desde cero cada vez.",
+        concreteExample: "Resultado: 'María Gómez — $4,200 en 12 pedidos. Pedro Ramírez — $3,800 en 8 pedidos. Ana Torres — $3,100 en 15 pedidos.' Top 10 ordenado de mayor a menor del año en curso.",
         architectureAnalysis: {
-          summary: "Las verdes ya están listas. La amarilla (conversation_insights) NO debe quedarse como texto libre: hay que snapshot-ear semanalmente y extraer features cuantitativas para entrenar el modelo más valioso del producto (detector de breakthrough + predictor de abandono).",
+          summary: "El cálculo runtime funciona con pocos clientes. Para escalar y habilitar tendencias + ML de churn, hay que materializar customer_metrics + snapshot mensual.",
           items: [
             {
-              entityId: "conversation_insights",
+              entityId: "customer_metrics",
               recommendation: "snapshot",
-              reasoning: "La comprensión EVOLUCIONA a lo largo del programa. Sin snapshots semanales pierdes la curva — solo tienes el último valor. Sin curva no hay tendencia, sin tendencia no hay modelo predictivo.",
+              reasoning: "total_spent calculado runtime no escala. Sin snapshots mensuales pierdes la curva del LTV — solo tienes el valor actual.",
               mlRelevance: "critical",
-              mlContext: "Modelo de detección de 'momento de breakthrough' (cuándo el coachee tuvo el insight clave) + modelo de churn (correlación entre estancamiento narrativo y abandono futuro)"
-            },
-            {
-              entityId: "student_progress",
-              recommendation: "materialize",
-              reasoning: "Ya está materializada. Solo agregar snapshots semanales del % avance por coachee para tener serie temporal limpia.",
-              mlRelevance: "useful",
-              mlContext: "Feature primario: el ritmo de avance es el predictor #1 de éxito en programas educativos"
+              mlContext: "Modelo de regresión de LTV predictivo a 90 días + modelo de churn binario que necesita serie temporal de gasto"
             }
           ]
         }
       },
       {
-        id: "q2-completion",
-        title: "Pregunta 2 — Completion del programa",
-        text: "¿Qué porcentaje de coachees completó el programa entero?",
-        keywords: ["porcentaje", "coachees", "completó", "programa"],
+        id: "q2-saas-churn",
+        title: "Pregunta 2 — Riesgo de cancelación (SaaS)",
+        text: "¿Qué usuarios están en riesgo de cancelar en los próximos 30 días?",
+        keywords: ["usuarios", "riesgo", "cancelar"],
         entities: [
-          { id: "tenants",            label: "tenants",            subtitle: "slug='mia'",           status: "existing", col: 1, row: 1, columns: ["id", "slug"] },
-          { id: "course_enrollments", label: "course_enrollments", subtitle: "completed_at = manual", status: "design",   col: 2, row: 1, columns: ["id", "status", "enrolled_at", "completed_at (MANUAL)"] },
-          { id: "student_progress",   label: "student_progress",   subtitle: "completion por módulo",  status: "existing", col: 3, row: 1, columns: ["enrollment_id", "module_id", "status"] },
-          { id: "auto_completion_trigger", label: "auto-completion rule", subtitle: "FALTA", status: "missing", col: 2, row: 2, columns: ["IF todos modulos.status='completed'", "THEN enrollment.completed_at = NOW()"] },
+          { id: "users",                label: "users",                subtitle: "usuarios registrados",            status: "existing", col: 1, row: 1, columns: ["id PK", "email", "plan", "signed_up_at", "last_active_at"] },
+          { id: "subscriptions",        label: "subscriptions",        subtitle: "suscripciones",                   status: "existing", col: 2, row: 1, columns: ["user_id FK", "plan", "status", "started_at", "cancelled_at"] },
+          { id: "usage_events",         label: "usage_events",         subtitle: "eventos como JSON sin schema",    status: "design",   col: 3, row: 1, columns: ["user_id FK", "event_type", "occurred_at", "payload JSONB (sin schema)"] },
+          { id: "churn_risk_score",     label: "churn_risk_score",     subtitle: "FALTA — scoring estructurado",    status: "missing",  col: 1, row: 2, columns: ["user_id FK", "score (0-100)", "computed_at", "factors JSONB", "model_version"] },
+          { id: "cancellation_signals", label: "cancellation_signals", subtitle: "FALTA — señales tempranas",        status: "missing",  col: 3, row: 2, columns: ["user_id FK", "signal_type ENUM", "occurred_at", "severity"] },
         ],
         connections: [
-          { from: "tenants", to: "course_enrollments" },
-          { from: "course_enrollments", to: "student_progress" },
-          { from: "student_progress", to: "auto_completion_trigger" },
-          { from: "auto_completion_trigger", to: "course_enrollments" },
+          { from: "users",        to: "subscriptions" },
+          { from: "users",        to: "usage_events" },
+          { from: "users",        to: "churn_risk_score" },
+          { from: "users",        to: "cancellation_signals" },
         ],
         sql:
-`-- Lo que SE PUEDE responder hoy (manual):
-SELECT
-  COUNT(*) FILTER (WHERE completed_at IS NOT NULL) * 100.0 / COUNT(*) AS pct_completado
-FROM course_enrollments ce
-JOIN tenants t ON t.id = ce.tenant_id
-WHERE t.slug = 'mia';
+`-- Hoy: solo proxy débil (usuarios "inactivos")
+SELECT u.id, u.email, u.plan, u.last_active_at,
+       AGE(NOW(), u.last_active_at) AS inactivity
+FROM users u
+JOIN subscriptions s ON s.user_id = u.id
+WHERE s.status = 'active'
+  AND u.last_active_at < NOW() - INTERVAL '14 days'
+ORDER BY u.last_active_at ASC;
 
--- PROBLEMA: completed_at se setea a mano.
--- Resultado: el % refleja "quién marcamos como completo", no "quién completó de verdad".
-
--- Lo que DEBERÍA pasar (cálculo derivado):
-SELECT
-  COUNT(DISTINCT ce.id) FILTER (
-    WHERE NOT EXISTS (
-      SELECT 1 FROM course_modules cm
-      LEFT JOIN student_progress sp
-        ON sp.enrollment_id = ce.id AND sp.module_id = cm.id
-      WHERE cm.course_id = ce.course_id
-        AND (sp.status IS NULL OR sp.status != 'completed')
-    )
-  ) * 100.0 / COUNT(DISTINCT ce.id) AS pct_completado_real
-FROM course_enrollments ce
-JOIN tenants t ON t.id = ce.tenant_id
-WHERE t.slug = 'mia';`,
-        translation: "Hoy MIA tiene la columna 'completed_at' pero NADIE la pone automáticamente. Una persona tiene que entrar al admin y marcar manualmente. Entonces tu reporte de completion refleja 'a quién marcamos', no 'quién realmente terminó'. Eso es un GAP estructural — necesitas una regla automática que cierre el enrollment cuando los módulos estén todos completos.",
-        designDecision: "Agregar un background job o un trigger en la BD: cuando StudentProgress llega a 'completed' en el último módulo del curso, actualizar CourseEnrollment.completed_at automáticamente.",
-        plainSummary: "Para responder esto MIA necesita saber: quién se inscribió, y de esos quién terminó. La parte 'quién terminó' es donde está el problema: hoy alguien tiene que poner una marca a mano. Si nadie la pone, parece que nadie completó — aunque sí completaron.",
-        concreteExample: "Imagínate: 10 coachees terminaron los 7 módulos del programa la semana pasada. Si el admin no entró a marcarlos como 'completados', tu reporte dice '0% completaron'. La realidad: 100% completaron. La regla automática elimina ese error.",
+-- IDEAL: score + signals + features  (HOY NO SE PUEDE)
+SELECT u.id, u.email, crs.score, crs.factors,
+       COUNT(cs.id) AS signal_count
+FROM users u
+LEFT JOIN churn_risk_score crs
+       ON crs.user_id = u.id
+      AND crs.computed_at::date = CURRENT_DATE
+LEFT JOIN cancellation_signals cs
+       ON cs.user_id = u.id
+      AND cs.occurred_at > NOW() - INTERVAL '30 days'
+WHERE crs.score >= 70
+GROUP BY u.id, crs.score, crs.factors
+ORDER BY crs.score DESC;`,
+        translation: "Hoy solo puedes responder esto mirando usuarios INACTIVOS — un proxy débil. Predicción real requiere score + señales (downgrades, quejas, drops de uso) + modelo entrenado. Sin eventos estructurados ni snapshots, no entrenas nada.",
+        designDecision: "1) Estructurar usage_events con event_type ENUM + payload por type. 2) Crear churn_risk_score como snapshot diario. 3) cancellation_signals como log append-only.",
+        plainSummary: "Para anticipar quién va a cancelar el sistema necesita 3 cosas: medir uso REAL (no solo último login), capturar SEÑALES de descontento, y tener un MODELO entrenado con datos históricos. Hoy solo se mira el último login — predice mal y tarde.",
+        concreteExample: "Resultado ideal: 'Acme Corp (plan Pro) — score 87/100. Razones: dejó de usar feature X hace 12 días, 3 tickets de queja, downgrade attempt detectado.' Listado priorizado para customer success.",
         architectureAnalysis: {
-          summary: "completed_at debe materializarse vía TRIGGER automático, no calcularse runtime. Es un evento de negocio que dispara acciones (diploma, billing, comunicaciones) y además es el TARGET principal del modelo de churn.",
+          summary: "Para construir un modelo de churn predictivo, los 3 elementos faltantes son críticos: eventos estructurados (training data), score histórico (target + features), y señales atómicas (features tempranas).",
           items: [
             {
-              entityId: "course_enrollments",
+              entityId: "usage_events",
               recommendation: "materialize",
-              reasoning: "completed_at NO es solo un dato derivable — es un EVENTO de negocio. Cuando se setea, debe disparar acciones (envío de diploma, cobro del siguiente período, encuesta NPS). Si lo calculas runtime, no tienes momento de transición que capturar.",
+              reasoning: "Hoy el payload es JSONB sin schema — imposible de usar como feature de ML. Hay que estructurar event_type como ENUM y schema por tipo de evento.",
               mlRelevance: "critical",
-              mlContext: "Es el target principal para entrenar modelo de churn supervisado: 'estos features predicen completion=true vs false'. Sin completed_at limpio el modelo no tiene labels"
+              mlContext: "Features primarias de cualquier modelo de churn — engagement por feature, frecuencia, recencia"
             },
             {
-              entityId: "auto_completion_trigger",
-              recommendation: "new_rule",
-              reasoning: "No es tabla, es regla de negocio. Implementar como trigger postgres O como cron diario en backend que evalúa: SI todos los modules.status='completed' ENTONCES setear enrollment.completed_at=NOW() + emit evento 'course_completed'.",
-              mlRelevance: "useful",
-              mlContext: "El evento 'course_completed' poblado consistentemente es lo que permite calcular completion rate por cohorte/programa/coach — features de segundo orden para modelos de coaching"
-            }
-          ]
-        }
-      },
-      {
-        id: "q3-goal",
-        title: "Pregunta 3 — Objetivo declarado",
-        text: "¿Qué objetivo declaró cada coachee al inicio del programa?",
-        keywords: ["objetivo", "declaró", "coachee", "inicio"],
-        entities: [
-          { id: "tenants",            label: "tenants",            subtitle: "slug='mia'",                   status: "existing", col: 1, row: 1, columns: ["id", "slug"] },
-          { id: "course_enrollments", label: "course_enrollments", subtitle: "onboarding_data = JSON libre", status: "design",   col: 2, row: 1, columns: ["id", "student_phone", "onboarding_data (JSONB sin schema)"] },
-          { id: "coachee_goals",      label: "coachee_goals",      subtitle: "FALTA — tabla nueva",          status: "missing", col: 3, row: 1, columns: ["id", "enrollment_id FK", "goal_category", "goal_text", "target_date", "measurable_outcome"] },
-          { id: "goal_progress",      label: "goal_progress",      subtitle: "FALTA — tracking",              status: "missing", col: 3, row: 2, columns: ["goal_id FK", "checkpoint_date", "score (0-100)", "evidence_summary"] },
-        ],
-        connections: [
-          { from: "tenants", to: "course_enrollments" },
-          { from: "course_enrollments", to: "coachee_goals" },
-          { from: "coachee_goals", to: "goal_progress" },
-        ],
-        sql:
-`-- Lo que se PUEDE leer hoy (JSON libre, sin schema):
-SELECT
-  ce.student_name,
-  jsonb_pretty(ce.onboarding_data::jsonb) AS onboarding_raw
-FROM course_enrollments ce
-JOIN tenants t ON t.id = ce.tenant_id
-WHERE t.slug = 'mia' AND ce.onboarding_data IS NOT NULL;
-
--- PROBLEMA: cada coachee puede tener su objetivo escrito de forma distinta,
--- en cualquier campo del JSON. Imposible agrupar, categorizar o medir avance.
-
--- Lo que necesitaríamos crear:
-CREATE TABLE coachee_goals (
-  id              UUID PRIMARY KEY,
-  enrollment_id   UUID REFERENCES course_enrollments(id) ON DELETE CASCADE,
-  goal_category   VARCHAR(50),   -- 'liderazgo' | 'comunicacion' | 'gestion_tiempo' | ...
-  goal_text       TEXT,          -- texto narrativo del coachee
-  target_date     DATE,
-  measurable_outcome TEXT,       -- 'sostener 3 reuniones difíciles sin escalar'
-  declared_at     TIMESTAMP DEFAULT NOW()
-);`,
-        translation: "Hoy MIA guarda lo que el coachee dice en su primer mensaje como un JSON sin estructura. Cada coachee tiene su objetivo escrito a su manera y en cualquier lugar del JSON. No puedes preguntar 'cuántos coachees vienen por liderazgo' ni 'cuántos lograron su objetivo'. Como dice el dicho del taller: una columna en JSON es una decisión postergada. Esto es ROADMAP claro.",
-        designDecision: "Crear tabla coachee_goals con categoría + texto + outcome medible. Y una segunda tabla goal_progress para tracking. Esto convierte coaching narrativo en coaching medible sin perder la narrativa.",
-        plainSummary: "Para responder esto MIA necesita saber: cuál fue el objetivo que el coachee declaró al inicio. Hoy esa información sí se captura — pero queda guardada como texto suelto, no como un dato que se pueda contar o agrupar. Es como tener mil cartas escritas a mano en una caja: la info está, pero no la puedes graficar.",
-        concreteExample: "Imagínate que María dijo 'quiero ser mejor líder', Pedro dijo 'mejorar mi comunicación', y Ana dijo 'gestionar mi tiempo'. Hoy esos textos viven sueltos. NO puedes responder '¿cuántos coachees vienen por temas de liderazgo este trimestre?' — aunque la respuesta esté ahí.",
-        architectureAnalysis: {
-          summary: "Acá las dos faltantes son CRÍTICAS para ML. coachee_goals va materializada con categoría enum (no texto libre) — sirve para segmentación + recomendación. goal_progress va como snapshot semanal append-only — sin esto no entrenas modelos de 'tiempo a meta' ni detectas estancamientos.",
-          items: [
-            {
-              entityId: "course_enrollments",
-              recommendation: "runtime",
-              reasoning: "El JSON crudo en onboarding_data NO debe usarse para analítica. Hay que extraer el objetivo y materializarlo en tabla aparte (ver coachee_goals). El JSON queda solo como respaldo del input original.",
-              mlRelevance: "low",
-              mlContext: "JSON sin schema NO es feature usable para ML. Hay que normalizarlo a tabla estructurada primero"
-            },
-            {
-              entityId: "coachee_goals",
-              recommendation: "materialize",
-              reasoning: "Tabla nueva con goal_category ENUM ('liderazgo', 'comunicacion', etc), goal_text libre, target_date, measurable_outcome. Sin enum no hay group-by. Sin tabla no hay JOIN con outcomes. Es el feature de PERSONALIZACIÓN del producto.",
-              mlRelevance: "critical",
-              mlContext: "Clustering de coachees por tipo de objetivo + sistema de recomendación de programa según objetivo declarado + análisis de demanda por categoría para roadmap de contenido"
-            },
-            {
-              entityId: "goal_progress",
+              entityId: "churn_risk_score",
               recommendation: "snapshot",
-              reasoning: "Append-only semanal. Cada semana se evalúa qué tanto se acercó el coachee a su meta (score 0-100 + evidence). Sin esto pierdes la trayectoria. CON esto puedes graficar 'velocidad de avance' por coachee y compararla con benchmark de la cohorte.",
+              reasoning: "Append-only diario con score + features + versión del modelo. Sin esto no hay backtesting ni auditoría de predicciones.",
               mlRelevance: "critical",
-              mlContext: "Modelo de predicción de tiempo de cumplimiento de objetivo + detector temprano de coachees estancados (intervenir antes de que abandonen) + benchmark dinámico de programas"
-            }
-          ]
-        }
-      },
-      {
-        id: "q4-kolb-completion",
-        title: "Pregunta 4 — Kolb vs completion",
-        text: "¿Los coachees con perfil Kolb 'Acomodador' completan más módulos que los 'Asimiladores'?",
-        keywords: ["Kolb", "perfil", "completan", "módulos"],
-        entities: [
-          { id: "tenants",            label: "tenants",            subtitle: "slug='mia'",        status: "existing", col: 1, row: 1, columns: ["id", "slug"] },
-          { id: "course_enrollments", label: "course_enrollments", subtitle: "cada coachee",      status: "existing", col: 2, row: 1, columns: ["id", "student_name"] },
-          { id: "form_responses",     label: "form_responses",     subtitle: "test Kolb",         status: "existing", col: 3, row: 1, columns: ["enrollment_id", "computed_result (JSON con dominant_style)"] },
-          { id: "student_progress",   label: "student_progress",   subtitle: "módulos completos", status: "existing", col: 2, row: 2, columns: ["enrollment_id", "module_id", "status"] },
-          { id: "course_modules",     label: "course_modules",     subtitle: "total módulos",      status: "existing", col: 3, row: 2, columns: ["id", "course_id"] },
-        ],
-        connections: [
-          { from: "tenants", to: "course_enrollments" },
-          { from: "course_enrollments", to: "form_responses" },
-          { from: "course_enrollments", to: "student_progress" },
-          { from: "course_modules", to: "student_progress" },
-        ],
-        sql:
-`SELECT
-  fr.computed_result->>'dominant_style' AS perfil_kolb,
-  COUNT(DISTINCT ce.id) AS coachees,
-  AVG(modulos_completados) AS promedio_modulos
-FROM course_enrollments ce
-JOIN tenants t ON t.id = ce.tenant_id
-LEFT JOIN form_responses fr ON fr.enrollment_id = ce.id
-LEFT JOIN LATERAL (
-  SELECT COUNT(*) AS modulos_completados
-  FROM student_progress sp
-  WHERE sp.enrollment_id = ce.id AND sp.status = 'completed'
-) m ON true
-WHERE t.slug = 'mia'
-  AND fr.computed_result IS NOT NULL
-GROUP BY perfil_kolb
-ORDER BY promedio_modulos DESC;`,
-        translation: "Esta es la pregunta JOYA — MIA SÍ la responde, sin gap. Puedes cruzar el perfil Kolb de cada coachee con cuántos módulos completó, y te dice qué estilo de aprendizaje resuena más con el programa. Sirve para decidir: ¿adaptamos el contenido para los perfiles que abandonan más, o reforzamos los que ya funcionan?",
-        designDecision: "Cero cambios necesarios. Esta pregunta demuestra el VALOR del modelado que ya tienen.",
-        plainSummary: "Para responder esto MIA necesita conectar tres cosas: el resultado del test de Kolb de cada coachee, los módulos que cada uno completó, y el total de módulos del programa. Las tres están ahí, listas para cruzarse. Sin gaps.",
-        concreteExample: "Resultado real: 'Los coachees con perfil Acomodador completan en promedio 5.8 módulos. Los Asimiladores: 3.2. Conclusión: el contenido actual conecta mejor con quien aprende haciendo. Decisión: rediseñar 2 módulos para Asimiladores, o aceptar que el programa es para Acomodadores y comunicarlo así.'",
-        architectureAnalysis: {
-          summary: "Todo verde — no hay decisiones arquitectónicas pendientes. Las 4 tablas son features primarias para el modelo más útil de coaching adaptativo: 'qué módulo recomendar según perfil Kolb del coachee'. Si NO existe aún, esta pregunta justifica construirlo.",
-          items: [
-            {
-              entityId: "form_responses",
-              recommendation: "materialize",
-              reasoning: "Ya está materializada (verde). computed_result como JSON con dominant_style está bien. Solo aseguraría índice GIN sobre computed_result para filtros rápidos.",
-              mlRelevance: "critical",
-              mlContext: "Perfil Kolb es FEATURE FUNDACIONAL para personalización. Entra como variable categórica en cualquier modelo de coaching adaptativo"
+              mlContext: "Output del modelo de clasificación binaria + tracking de drift del modelo"
             },
             {
-              entityId: "student_progress",
-              recommendation: "snapshot",
-              reasoning: "Aunque está materializada, agregar snapshot semanal de avance por perfil permite analizar EVOLUCIÓN del fit-perfil-vs-programa a lo largo del tiempo.",
+              entityId: "cancellation_signals",
+              recommendation: "materialize",
+              reasoning: "Log atómico de eventos críticos (downgrade, queja, drop de uso). Triggers para alertas en tiempo real.",
               mlRelevance: "useful",
-              mlContext: "Validación continua del modelo de recomendación: ¿el módulo recomendado al perfil X realmente aumentó completion rate?"
+              mlContext: "Features secundarias del modelo — eventos cualitativos vs solo cuantitativos"
             }
           ]
         }
       },
       {
-        id: "q5-stuck",
-        title: "Pregunta 5 — Módulo donde se quedan",
-        text: "¿En qué módulo se quedan más coachees? ¿Cuál es el módulo de mayor abandono?",
-        keywords: ["módulo", "quedan", "abandono", "coachees"],
+        id: "q3-edtech-stuck-module",
+        title: "Pregunta 3 — Módulo de abandono (edtech)",
+        text: "¿En qué módulo del curso se atascan más los estudiantes?",
+        keywords: ["módulo", "atascan", "estudiantes"],
         entities: [
-          { id: "tenants",            label: "tenants",            subtitle: "slug='mia'",     status: "existing", col: 1, row: 1, columns: ["id", "slug"] },
-          { id: "course_enrollments", label: "course_enrollments", subtitle: "cada coachee",   status: "existing", col: 2, row: 1, columns: ["id", "status"] },
-          { id: "student_progress",   label: "student_progress",   subtitle: "último módulo tocado", status: "existing", col: 3, row: 1, columns: ["enrollment_id", "module_id", "status", "updated_at"] },
-          { id: "course_modules",     label: "course_modules",     subtitle: "info del módulo", status: "existing", col: 3, row: 2, columns: ["id", "title", "order", "module_type"] },
+          { id: "courses",         label: "courses",         subtitle: "catálogo de cursos",       status: "existing", col: 1, row: 1, columns: ["id PK", "title", "duration_weeks", "is_active"] },
+          { id: "modules",         label: "modules",         subtitle: "módulos del curso",        status: "existing", col: 2, row: 1, columns: ["id PK", "course_id FK", "title", "\"order\""] },
+          { id: "enrollments",     label: "enrollments",     subtitle: "estudiantes inscritos",     status: "existing", col: 3, row: 1, columns: ["id PK", "user_id FK", "course_id FK", "started_at"] },
+          { id: "module_progress", label: "module_progress", subtitle: "avance por módulo",         status: "existing", col: 2, row: 2, columns: ["enrollment_id FK", "module_id FK", "status", "started_at", "completed_at"] },
         ],
         connections: [
-          { from: "tenants", to: "course_enrollments" },
-          { from: "course_enrollments", to: "student_progress" },
-          { from: "course_modules", to: "student_progress" },
+          { from: "courses",     to: "modules" },
+          { from: "courses",     to: "enrollments" },
+          { from: "enrollments", to: "module_progress" },
+          { from: "modules",     to: "module_progress" },
         ],
         sql:
-`WITH last_module AS (
-  SELECT DISTINCT ON (sp.enrollment_id)
-    sp.enrollment_id,
-    sp.module_id,
-    sp.status
-  FROM student_progress sp
-  JOIN course_enrollments ce ON ce.id = sp.enrollment_id
-  JOIN tenants t            ON t.id = ce.tenant_id
-  WHERE t.slug = 'mia' AND sp.status != 'completed'
-  ORDER BY sp.enrollment_id, sp.updated_at DESC
+`WITH last_attempted AS (
+  SELECT DISTINCT ON (mp.enrollment_id)
+    mp.enrollment_id, mp.module_id, mp.status
+  FROM module_progress mp
+  WHERE mp.status != 'completed'
+  ORDER BY mp.enrollment_id, mp.started_at DESC
 )
 SELECT
-  cm.order AS modulo_n,
-  cm.title AS modulo,
-  COUNT(*) AS coachees_atascados
-FROM last_module lm
-JOIN course_modules cm ON cm.id = lm.module_id
-GROUP BY cm.id
-ORDER BY coachees_atascados DESC;`,
-        translation: "MIA te dice EXACTAMENTE en qué módulo se atascan los coachees. Es el dato más útil para mejorar tu producto: el módulo con más abandono = el módulo que hay que revisar. Es como tener Google Analytics pero del aprendizaje. Sin gaps, todo verde.",
-        designDecision: "Cero cambios. Otra pregunta donde el modelo brilla.",
-        plainSummary: "Para responder esto MIA mira el último módulo que cada coachee tocó (sin completar), agrupa por módulo, y cuenta. El módulo con más coachees parados = el módulo que tiene un problema. Puede ser muy difícil, muy aburrido, o estar mal explicado.",
-        concreteExample: "Ejemplo: 'Módulo 4 — Conversaciones difíciles: 12 coachees atascados. Módulo 2: 3 atascados. Módulo 1: 1 atascado.' Conclusión obvia: hay que revisar qué pasa en el módulo 4. Tal vez la actividad es muy demandante, tal vez el coach tiene que intervenir más temprano, tal vez hay que dividirlo en dos.",
+  m.id AS modulo_id,
+  m."order" AS modulo_n,
+  m.title AS modulo_titulo,
+  COUNT(la.enrollment_id) AS estudiantes_atascados
+FROM last_attempted la
+JOIN modules m ON m.id = la.module_id
+GROUP BY m.id, m."order", m.title
+ORDER BY estudiantes_atascados DESC;`,
+        translation: "Esta pregunta se responde PERFECTO con las tablas que tienes. El sistema mira el último módulo donde cada estudiante quedó atascado, agrupa por módulo, cuenta. Módulo con más alumnos parados = módulo que hay que revisar urgente.",
+        designDecision: "Cero cambios necesarios. El next-step natural sería materializar stuck_risk_score por enrollment (cron diario) para INTERVENIR antes de que abandonen.",
+        plainSummary: "Para responder esto el sistema mira el último módulo que cada estudiante tocó sin completar, agrupa por módulo, y cuenta. Cero gaps. El módulo con más estudiantes parados es el problemático.",
+        concreteExample: "Resultado: 'Módulo 4 — Análisis estadístico: 23 estudiantes atascados. Módulo 7: 11. Módulo 2: 3. Módulo 1: 0.' Conclusión obvia: el módulo 4 necesita revisión de contenido.",
         architectureAnalysis: {
-          summary: "Todo verde — la BD ya soporta esta pregunta. El paso PRÓXIMO de arquitectura: materializar un 'risk_score' por coachee (calculado runtime + snapshot diario) para intervenir ANTES de que se atasquen. Eso es lo que convierte reporting reactivo en producto proactivo con ML.",
+          summary: "Todo verde. La pregunta se responde con queries simples. El next-step natural: materializar stuck_risk_score para intervenir ANTES del abandono — convierte reporting reactivo en producto con ML.",
           items: [
             {
-              entityId: "student_progress",
+              entityId: "module_progress",
               recommendation: "snapshot",
-              reasoning: "Materializar bien. Pero agregar tabla nueva 'stuck_risk_assessments' con snapshot diario: por cada enrollment activo, calcular score 0-100 de probabilidad de atascarse en el próximo módulo. Sin esto solo VES el atasco después, no antes.",
+              reasoning: "Ya está materializado. Agregar snapshot semanal del avance permite analizar tendencias de abandono por cohorte.",
+              mlRelevance: "useful",
+              mlContext: "Modelo de predicción de abandono en próximo módulo — features: tiempo en módulo actual, módulos completados previos, ritmo histórico"
+            }
+          ]
+        }
+      },
+      {
+        id: "q4-healthtech-no-shows",
+        title: "Pregunta 4 — No-shows por doctor (healthtech)",
+        text: "¿Cuál es la tasa de no-shows por doctor y por horario del día?",
+        keywords: ["no-shows", "doctor", "horario", "tasa"],
+        entities: [
+          { id: "doctors",            label: "doctors",            subtitle: "doctores con especialidad",   status: "existing", col: 1, row: 1, columns: ["id PK", "name", "specialty", "license"] },
+          { id: "appointments",       label: "appointments",       subtitle: "citas con status libre",      status: "design",   col: 2, row: 1, columns: ["id PK", "doctor_id FK", "patient_id FK", "scheduled_at", "status VARCHAR (debería ENUM)"] },
+          { id: "patients",           label: "patients",           subtitle: "pacientes",                    status: "existing", col: 3, row: 1, columns: ["id PK", "name", "phone"] },
+          { id: "no_show_risk_score", label: "no_show_risk_score", subtitle: "FALTA — score por cita",       status: "missing",  col: 1, row: 2, columns: ["appointment_id FK", "risk_score", "factors JSONB", "computed_at"] },
+          { id: "reminders_log",      label: "reminders_log",      subtitle: "FALTA — recordatorios",        status: "missing",  col: 3, row: 2, columns: ["appointment_id FK", "channel ENUM", "sent_at", "response", "minutes_before"] },
+        ],
+        connections: [
+          { from: "doctors",      to: "appointments" },
+          { from: "patients",     to: "appointments" },
+          { from: "appointments", to: "no_show_risk_score" },
+          { from: "appointments", to: "reminders_log" },
+        ],
+        sql:
+`SELECT
+  d.name      AS doctor,
+  d.specialty,
+  EXTRACT(HOUR FROM a.scheduled_at) AS hora,
+  COUNT(*)    AS total_citas,
+  COUNT(*) FILTER (WHERE a.status = 'no_show') AS no_shows,
+  ROUND(100.0 * COUNT(*) FILTER (WHERE a.status = 'no_show') / COUNT(*), 1) AS pct_no_show
+FROM appointments a
+JOIN doctors d ON d.id = a.doctor_id
+WHERE a.scheduled_at >= NOW() - INTERVAL '90 days'
+GROUP BY d.id, d.name, d.specialty, EXTRACT(HOUR FROM a.scheduled_at)
+HAVING COUNT(*) >= 10
+ORDER BY pct_no_show DESC, total_citas DESC;`,
+        translation: "Puedes calcular la TASA de no-show por doctor y por hora. PROBLEMA: si appointments.status es texto libre, puede tener typos ('NoShow', 'no-show', 'NO_SHOW') que rompen el conteo. Y sin reminders ni risk_score solo MIDES — no PREVIENES.",
+        designDecision: "1) Convertir appointments.status a ENUM. 2) Crear no_show_risk_score como snapshot diario (24h antes). 3) reminders_log para entrenar qué canales y timing previenen no-shows.",
+        plainSummary: "Para responder esto el sistema necesita saber qué citas no aparecieron. Hoy SE PUEDE pero el status como texto libre puede tener inconsistencias. Lo que NO tienes: forma de PREDECIR cuáles pacientes van a faltar mañana.",
+        concreteExample: "Resultado: 'Dr. Pérez a las 8am: 32% no-show (15 de 47 citas). Dr. Pérez a las 4pm: 8%. Dra. López a las 8am: 5%.' Acción: re-agendar el horario de 8am del Dr. Pérez o doblar recordatorios.",
+        architectureAnalysis: {
+          summary: "Status como text libre limita la analítica hoy. Sin tablas de reminders y risk_score no se puede prevenir — solo medir. Ambas son críticas para convertir el problema reactivo en producto proactivo.",
+          items: [
+            {
+              entityId: "appointments",
+              recommendation: "materialize",
+              reasoning: "Status como VARCHAR libre permite inconsistencias. Convertir a ENUM ('scheduled'|'completed'|'no_show'|'cancelled') con CHECK constraint.",
+              mlRelevance: "useful",
+              mlContext: "Target del modelo de clasificación: appointments.status='no_show' es la etiqueta a predecir"
+            },
+            {
+              entityId: "no_show_risk_score",
+              recommendation: "snapshot",
+              reasoning: "Score por appointment calculado 24h antes (cron diario). Append-only con factors JSONB para auditoría. Sin esto no hay forma de intervenir.",
               mlRelevance: "critical",
-              mlContext: "Modelo de predicción de atasco entrenado con (features del coachee + features del módulo) → target=se_atascó. Es el modelo que convierte MIA en producto verdaderamente diferenciado: el coach interviene 2 semanas ANTES del abandono"
+              mlContext: "Output del modelo + tracking de drift. Permite backtest cuando cambias features."
+            },
+            {
+              entityId: "reminders_log",
+              recommendation: "materialize",
+              reasoning: "Log de cada reminder enviado (canal, timing, respuesta). Sin esto no puedes entrenar qué reminder previno el no-show.",
+              mlRelevance: "critical",
+              mlContext: "Features de causalidad para uplift modeling: ¿el reminder previno el no-show o iban a venir igual?"
+            }
+          ]
+        }
+      },
+      {
+        id: "q5-crm-auto-resolution",
+        title: "Pregunta 5 — Tickets auto-resueltos (CRM)",
+        text: "¿Qué porcentaje de tickets se resuelven sin escalar a humano?",
+        keywords: ["tickets", "resuelven", "humano"],
+        entities: [
+          { id: "tickets",                     label: "tickets",                     subtitle: "tickets de soporte",                status: "existing", col: 1, row: 1, columns: ["id PK", "customer_id FK", "subject", "created_at", "resolved_at", "resolved_by"] },
+          { id: "ticket_messages",             label: "ticket_messages",             subtitle: "mensajes del ticket",                status: "existing", col: 2, row: 1, columns: ["ticket_id FK", "sender_type", "content", "created_at"] },
+          { id: "tickets_resolved_by_design",  label: "tickets.resolved_by",         subtitle: "texto libre — debería ENUM",         status: "design",   col: 3, row: 1, columns: ["resolved_by VARCHAR libre", "valores: 'bot'|'Bot'|'AI'|'auto'|'agent'... inconsistente"] },
+          { id: "auto_resolution_classifier",  label: "auto_resolution_classifier",  subtitle: "FALTA — ML output",                  status: "missing",  col: 2, row: 2, columns: ["ticket_id FK", "was_auto_resolved BOOL", "confidence FLOAT", "model_version", "computed_at"] },
+        ],
+        connections: [
+          { from: "tickets", to: "ticket_messages" },
+          { from: "tickets", to: "tickets_resolved_by_design" },
+          { from: "tickets", to: "auto_resolution_classifier" },
+        ],
+        sql:
+`-- Hoy: usar resolved_by, pero ojo con inconsistencias
+SELECT
+  COUNT(*) FILTER (WHERE LOWER(resolved_by) IN ('bot','ai','auto','system')) * 100.0
+       / COUNT(*) AS pct_auto_resuelto
+FROM tickets
+WHERE resolved_at IS NOT NULL
+  AND resolved_at >= NOW() - INTERVAL '30 days';
+
+-- IDEAL: usar clasificador ML que distingue "bot resolvió" vs "cliente se fue"
+SELECT
+  COUNT(*) FILTER (WHERE arc.was_auto_resolved = TRUE) * 100.0
+       / COUNT(*) AS pct_auto_real
+FROM tickets t
+LEFT JOIN auto_resolution_classifier arc ON arc.ticket_id = t.id
+WHERE t.resolved_at >= NOW() - INTERVAL '30 days';`,
+        translation: "Hoy el sistema cuenta tickets cerrados como 'bot' vs 'agent' usando un campo de TEXTO LIBRE. Pueden haber typos e inconsistencias ('Bot'/'AI'/'auto'). Más grave: no sabes si el bot REALMENTE resolvió o el cliente se cansó y se fue sin respuesta.",
+        designDecision: "1) Convertir resolved_by a ENUM. 2) Crear auto_resolution_classifier — modelo ML que analiza ticket_messages y clasifica si el bot resolvió genuinamente o el cliente abandonó.",
+        plainSummary: "Para responder esto el sistema cuenta cuántos tickets cerró el bot vs el humano. El problema: el campo 'quién cerró' es texto libre, así que el conteo puede estar mal. Y más profundo: si el cliente se va sin responder, el sistema cuenta eso como 'auto-resuelto' aunque no lo sea.",
+        concreteExample: "Resultado naive: '73% auto-resuelto.' Resultado real (con clasificador ML): '52% bot resolvió genuinamente, 21% cliente se fue sin respuesta, 27% escaló a humano.' La diferencia entre marketing y verdad operativa.",
+        architectureAnalysis: {
+          summary: "El gap principal es semántico, no estructural: 'cerrado por el bot' ≠ 'el cliente quedó satisfecho'. Materializar un clasificador ML que analiza la conversación separa métrica vanity de métrica real.",
+          items: [
+            {
+              entityId: "tickets_resolved_by_design",
+              recommendation: "materialize",
+              reasoning: "Convertir a ENUM con CHECK constraint. Sin esto las queries necesitan LOWER() y enumerar variantes — frágil.",
+              mlRelevance: "useful",
+              mlContext: "Feature secundaria del clasificador — útil pero el ML real necesita analizar el contenido de los mensajes"
+            },
+            {
+              entityId: "auto_resolution_classifier",
+              recommendation: "materialize",
+              reasoning: "Modelo de clasificación NLP sobre ticket_messages que produce was_auto_resolved + confidence. Output persistido por ticket con versionado del modelo.",
+              mlRelevance: "critical",
+              mlContext: "Modelo de clasificación binaria sobre conversación: 'bot resolvió el problema' vs 'cliente abandonó'. Habilita métricas honestas de eficiencia del bot."
             }
           ]
         }
@@ -500,59 +476,80 @@ ORDER BY coachees_atascados DESC;`,
     // ENTITY_PLAIN_NAMES — Traducción de tabla técnica a lenguaje humano
     // ============================================================
     const ENTITY_PLAIN_NAMES = {
-      tenants:                  { title: "El espacio de MIA en Prestigio",      hint: "Como tu cuenta dentro de la plataforma" },
-      courses:                  { title: "El programa de coaching",              hint: "Cada programa que ofreces a tus coachees" },
-      course_enrollments:       { title: "Los coachees inscritos",               hint: "Como una lista de Excel: nombre, teléfono, cuándo entró" },
-      course_modules:           { title: "Los módulos del programa",             hint: "El contenido dividido en partes, ordenado" },
-      student_progress:         { title: "Por qué módulos pasó cada coachee",    hint: "Diario de avance: quién terminó qué, cuándo" },
-      conversation_insights:    { title: "Notas profundas del coaching",         hint: "Lo que MIA aprende de la conversación. Texto, no números." },
-      form_responses:           { title: "Respuestas al test (Kolb)",            hint: "Resultado del test de estilo de aprendizaje" },
-      auto_completion_trigger:  { title: "Regla automática de cierre",           hint: "La regla NO existe: hoy alguien tiene que marcar 'completado' a mano" },
-      coachee_goals:            { title: "Tabla de objetivos por coachee",       hint: "Esta tabla NO existe. Hoy el objetivo vive enterrado en un JSON sin schema" },
-      goal_progress:            { title: "Medición de avance vs objetivo",       hint: "Esta tabla NO existe. Sin ella no puedes graficar 'qué tanto se acercó cada coachee a su meta'" },
+      // E-commerce
+      customers:                { title: "Los clientes registrados",             hint: "Quién compra en tu tienda: nombre, email, fecha de alta" },
+      orders:                   { title: "Los pedidos",                          hint: "Cada compra realizada con su total y estado" },
+      order_items:              { title: "Productos dentro de cada pedido",      hint: "Detalle por pedido: qué producto, cuántas unidades, a qué precio" },
+      products:                 { title: "El catálogo de productos",             hint: "Los artículos a la venta con precio y stock" },
+      customer_metrics:         { title: "Métricas calculadas del cliente",      hint: "LTV / total gastado / recencia — vive como cálculo runtime, sin historia" },
+
+      // SaaS
+      users:                    { title: "Los usuarios de la app",               hint: "Cuentas registradas con su plan y última actividad" },
+      subscriptions:            { title: "Las suscripciones activas",            hint: "Plan, estado, fecha de inicio y cancelación" },
+      usage_events:             { title: "Eventos de uso",                       hint: "Qué hizo cada usuario y cuándo — útil para engagement" },
+      churn_risk_score:         { title: "Score de riesgo de churn",             hint: "Esta tabla NO existe. Sin ella no puedes anticipar quién va a cancelar" },
+      cancellation_signals:     { title: "Señales tempranas de cancelación",     hint: "Esta tabla NO existe. Capturaría downgrades, tickets de queja, drops de uso" },
+
+      // Edtech
+      courses:                  { title: "Los cursos disponibles",                hint: "El catálogo de programas educativos" },
+      modules:                  { title: "Los módulos del curso",                 hint: "El contenido dividido en partes ordenadas" },
+      enrollments:              { title: "Las inscripciones",                     hint: "Quién se inscribió a qué curso y cuándo" },
+      module_progress:          { title: "Avance por módulo",                     hint: "Qué módulos terminó cada estudiante, con timestamps" },
+
+      // Healthtech
+      patients:                 { title: "Los pacientes",                         hint: "Cada paciente con su historia clínica" },
+      doctors:                  { title: "Los doctores",                          hint: "Profesionales con su especialidad" },
+      appointments:             { title: "Las citas agendadas",                   hint: "Quién, con quién, cuándo, en qué estado" },
+      no_show_risk_score:       { title: "Score de riesgo de no-show",            hint: "Esta tabla NO existe. Sin ella no puedes prevenir ausencias" },
+      reminders_log:            { title: "Log de recordatorios enviados",         hint: "Esta tabla NO existe. Capturaría qué reminders se enviaron y si funcionaron" },
+
+      // CRM / soporte
+      tickets:                  { title: "Los tickets de soporte",                hint: "Cada solicitud con su estado y resolución" },
+      ticket_messages:          { title: "Mensajes dentro del ticket",            hint: "Conversación cliente ↔ agente o bot" },
+      auto_resolution_classifier: { title: "Clasificador automático de resolución", hint: "Esta tabla NO existe. Distinguiría 'el bot resolvió' vs 'el cliente se fue'" },
+
+      // Comunes
+      audit_log:                { title: "Log de auditoría",                      hint: "Quién cambió qué y cuándo — base para compliance y debugging" },
+      cohort:                   { title: "Cohortes / grupos",                     hint: "Agrupación por fecha de ingreso o criterio para análisis de retención" },
     };
 
     // ============================================================
-    // SCHEMA_KNOWLEDGE — Lo que Claude debe saber sobre zona-ai
-    // para mapear preguntas del cliente en vivo a entidades reales
+    // SCHEMA_KNOWLEDGE — Knowledge base genérico que Claude usa cuando NO
+    // hay esquema custom cargado. Detecta el dominio de la pregunta y
+    // propone tablas verdes / amarillas / rojas razonables.
     // ============================================================
-    const SCHEMA_KNOWLEDGE = `Eres un asistente que analiza preguntas de negocio sobre el dominio de COACHING de zona-ai (producto MIA, tenant de Prestigio). Tu trabajo: descomponer una pregunta en español natural en las tablas y columnas necesarias para responderla, marcando qué EXISTE hoy (verde), qué existe pero como decisión de diseño (amarillo), y qué FALTA (rojo).
+    const SCHEMA_KNOWLEDGE = `Eres un asistente que analiza preguntas de negocio sobre bases de datos. El usuario NO te dio un esquema específico — debes inferir un esquema razonable según el dominio de la pregunta (e-commerce, SaaS, edtech, healthtech, CRM, fintech, etc.).
 
-# TABLAS QUE EXISTEN HOY EN ZONA-AI (status: "existing" — VERDE)
+Tu trabajo: descomponer la pregunta en español natural en las tablas y columnas que típicamente necesitaría para responderse, marcando qué probablemente EXISTE (verde), qué probablemente sea decisión de diseño problemática (amarillo), y qué probablemente FALTA (rojo).
 
-- tenants (id, slug, name) — el tenant MIA tiene slug='mia'
-- courses (id, tenant_id, title, is_active) — los programas del tenant
-- course_modules (id, course_id, title, order, module_type [reading|form|kolb_test], completion_criteria, module_objectives)
-- course_enrollments (id, course_id, tenant_id, student_phone, student_name, status [pending_terms|active|completed], enrolled_at, completed_at, onboarding_data JSONB)
-- student_progress (id, enrollment_id, module_id, status [not_started|in_progress|completed], started_at, completed_at, attendance_count, current_flow_step)
-- module_forms (id, module_id, form_type, questions JSONB, scoring_rules JSONB) — incluye el Kolb test como form_type='assessment'
-- form_responses (id, form_id, enrollment_id, answers JSONB, computed_result JSONB) — computed_result.dominant_style tiene el perfil Kolb
-- conversation_insights (id, enrollment_id, comprehension_level [low|medium|high], evolution_notes TEXT, emotional_state, topics_covered JSONB, decisions JSONB)
-- conversations, messages — base CRM
-- module_activities, activity_completion — actividades por módulo y completion
-- module_resources, module_lessons — contenido del módulo
-- student_profile (id, enrollment_id, learning_style, personal_context, extra_data JSONB)
-- student_decision (id, enrollment_id, conversation_id, decision_text, status)
-- course_onboardings (id, course_id, welcome_message, data_fields JSONB)
-- module_snapshot (id, enrollment_id, module_id, key_discoveries JSONB, decisions_summary JSONB, transformation_note TEXT)
+# TABLAS COMUNES POR DOMINIO (status: "existing" — VERDE)
 
-# DECISIONES DE DISEÑO (status: "design" — AMARILLO)
-Cuando una pregunta requiere algo que la tabla TIENE pero no en forma estructurada/analítica:
-- conversation_insights tiene comprehension_level (low|med|high) y evolution_notes TEXTO — NO hay score numérico de avance
-- course_enrollments.completed_at se setea MANUAL, NO hay trigger automático que cierre el enrollment cuando todos los módulos terminen
-- course_enrollments.onboarding_data es JSONB libre sin schema — el objetivo declarado vive enterrado sin categoría
-- student_profile.extra_data es JSONB sin schema
-- conversations no tiene score de calidad por mensaje
+E-commerce: customers, products, categories, orders, order_items, payments, shipments, inventory
+SaaS / suscripción: users, organizations, subscriptions, plans, usage_events, invoices
+Edtech: courses, modules, lessons, enrollments, progress, assessments, certificates
+Healthtech: patients, doctors, appointments, treatments, prescriptions, payments, clinical_notes
+CRM / soporte: tickets, ticket_messages, agents, customers, conversations, sla_policies
+Fintech: accounts, transactions, balances, transfers, kyc_records, audit_log
+Genéricas: users, sessions, events, audit_log, files
+
+# DECISIONES DE DISEÑO TÍPICAS (status: "design" — AMARILLO)
+Patrones que aparecen en BDs reales y limitan analítica:
+- Campos status/category/tier como VARCHAR libre (debería ser ENUM o FK a catálogo)
+- Columnas JSONB sin schema explícito (metadata, options, settings)
+- Flags booleanos que requieren mantenimiento manual (is_active, completed_at sin trigger)
+- Cálculos derivados ejecutados runtime sin snapshot histórico (LTV, scores)
+- Tablas sin updated_at, sin soft-delete, sin audit
+- Text libre para campos que deberían ser estructurados (notes, comments)
 
 # GAPS COMUNES (status: "missing" — ROJO)
-Cuando una pregunta requiere algo que NO existe como tabla, inventa un nombre snake_case descriptivo y propon columnas:
-- coachee_goals: enrollment_id FK, goal_category, goal_text, target_date, measurable_outcome
-- goal_progress: goal_id FK, checkpoint_date, score (0-100), evidence_summary
-- auto_completion_trigger: regla de negocio (no es tabla, es lógica): IF todos los módulos están completos THEN setear completed_at
-- coachee_satisfaction: enrollment_id, module_id, satisfaction_score (1-5), feedback TEXT
-- session_engagement: enrollment_id, session_date, engagement_score, attendance_minutes
-- competency_assessment: enrollment_id, competency_name, level (1-5), assessed_at
-- cohort: id, tenant_id, name, start_date — agrupar coachees por cohorte/grupo
+Tablas que casi siempre FALTAN en BDs no maduras y limitan ML/dashboards:
+- *_risk_score / *_metric: scoring estructurado (churn_risk_score, no_show_risk_score, fraud_score)
+- *_history / *_snapshot: tracking append-only para tendencia y training data
+- audit_log: auditoría de cambios
+- *_events: tabla de eventos atómicos para funnel/cohort analysis
+- *_classifier / *_predictions: outputs de modelos ML con versionado
+- cohort / segment: agrupación por período/criterio para análisis
+- intent_signals, search_funnel, behavior_log para captura de intención
 
 # FORMATO DE RESPUESTA REQUERIDO
 
@@ -564,9 +561,9 @@ Responde ÚNICAMENTE con un objeto JSON válido (sin markdown, sin texto antes o
   "keywords": ["<3-4 palabras CLAVE de la pregunta, sin stopwords>"],
   "entities": [
     {
-      "id": "<tabla snake_case del catálogo o nombre inventado si es missing>",
+      "id": "<tabla snake_case razonable al dominio detectado>",
       "label": "<mismo que id>",
-      "subtitle": "<frase corta tipo 'cada coachee', 'avance NARRATIVO', 'FALTA tabla nueva'>",
+      "subtitle": "<frase corta tipo 'cada cliente', 'estado NO estructurado', 'FALTA tabla nueva'>",
       "status": "existing" | "design" | "missing",
       "col": <int 1-4>,
       "row": <int 1-3>,
@@ -574,21 +571,21 @@ Responde ÚNICAMENTE con un objeto JSON válido (sin markdown, sin texto antes o
     }
   ],
   "connections": [{ "from": "<entity_id>", "to": "<entity_id>" }],
-  "sql": "<SQL ejecutable contra zona_ai filtrado por t.slug='mia'. Si la pregunta requiere tablas missing, incluye comentario '-- HOY NO SE PUEDE — falta tabla X' y muestra el query IDEAL>",
+  "sql": "<SQL ejecutable razonable. Si la pregunta requiere tablas missing, incluye comentario '-- HOY NO SE PUEDE — falta tabla X' y muestra el query IDEAL>",
   "translation": "<2-3 frases en español de gerente: qué responde la BD, qué NO, por qué>",
   "designDecision": "<próximo paso de producto: qué tabla o regla agregar>",
-  "plainSummary": "<para responder esto MIA necesita saber X, Y, Z. Frase grande, sin tecnicismos. Máximo 3 oraciones>",
-  "concreteExample": "<ejemplo concreto con nombres ficticios (María, Pedro, Ana) y datos plausibles. Forma 'Cuando preguntas X, MIA te diría Y' o 'Imagínate que...'>"
+  "plainSummary": "<para responder esto el sistema necesita saber X, Y, Z. Frase grande, sin tecnicismos. Máximo 3 oraciones>",
+  "concreteExample": "<ejemplo concreto con nombres ficticios apropiados al dominio (María, Pedro, Ana, Acme Corp, etc) y datos plausibles. Forma 'Cuando preguntas X, el sistema te diría Y' o 'Imagínate que...'>"
 }
 
 REGLAS:
 1. Mínimo 3 entidades, máximo 7
 2. Distribuye en grid 4 cols x 3 rows máximo, sin sobrelapar (col,row únicos)
-3. Para entidades VERDES usa tablas del catálogo exactamente como están
-4. Para AMARILLAS la tabla existe pero anota en columns cómo es no-estructurada (ej. "evolution_notes (TEXTO LIBRE)")
+3. Detecta el dominio de la pregunta antes de proponer tablas — no inventes esquemas inconsistentes
+4. Para AMARILLAS la tabla existe pero anota en columns cómo es no-estructurada (ej. "status VARCHAR (debería ser ENUM)")
 5. Para ROJAS inventa snake_case + columnas propuestas con tipos
-6. SQL siempre filtrado por t.slug='mia'
-7. Si la pregunta no es analizable (no aplica a coaching), devuelve un entity con id="out_of_scope" status="missing"`;
+6. SQL razonable al dominio, sin asumir tenant/schema específico
+7. Si la pregunta no es analizable como negocio sobre BD, devuelve un entity con id="out_of_scope" status="missing"`;
 
     // ============================================================
     // SCHEMA_PROCESSING_PROMPT — para parsear esquema custom del cliente
@@ -1294,7 +1291,7 @@ REGLAS:
             </div>
             <div className="p-6 space-y-4">
               <p className="text-zinc-300 leading-relaxed">
-                Para analizar preguntas en vivo, MIA usa Claude. Pega tu API key abajo — se guarda <strong className="text-amber-300">solo en tu navegador</strong> (localStorage). Nunca se manda a ningún servidor que no sea Anthropic.
+                Para analizar preguntas en vivo, la app usa Claude (Anthropic). Pega tu API key abajo — se guarda <strong className="text-amber-300">solo en tu navegador</strong> (localStorage). Nunca se manda a ningún servidor que no sea Anthropic.
               </p>
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-zinc-400 tracking-widest">CLAUDE API KEY</label>
@@ -1357,7 +1354,7 @@ REGLAS:
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit(); }}
               disabled={isAnalyzing}
-              placeholder={placeholder || "Escribe aquí la pregunta que acaba de hacer el cliente. Ej: '¿Cuáles coachees están en riesgo de abandonar?' o '¿Qué cohorte tiene mejor avance?'"}
+              placeholder={placeholder || "Escribe aquí la pregunta de tu negocio. Ej: '¿Qué clientes están en riesgo de churn?' o '¿En qué etapa del checkout se cae más gente?'"}
               rows="3"
               className="w-full bg-zinc-900/60 border border-zinc-800 focus:border-amber-500 outline-none rounded-xl px-4 py-3 text-white text-lg leading-snug resize-none disabled:opacity-50"
             />
@@ -1381,7 +1378,7 @@ REGLAS:
                     <path d="M22 12a10 10 0 0 1-10 10" />
                   </svg>
                 )}
-                {isAnalyzing ? "Analizando..." : "Analizar con MIA"}
+                {isAnalyzing ? "Analizando..." : "Analizar con Claude"}
                 {!isAnalyzing && <span>→</span>}
               </button>
             </div>
@@ -1585,7 +1582,7 @@ REGLAS:
               Cambiar
             </button>
             <button onClick={onClear} className="text-xs text-zinc-400 hover:text-white border border-zinc-700 hover:border-zinc-500 rounded-full px-3 py-1.5">
-              Volver a MIA
+              Volver a ejemplos
             </button>
           </div>
         </div>
@@ -1596,11 +1593,81 @@ REGLAS:
     // LandingScreen — pantalla inicial (sin pregunta seleccionada)
     // Hero + input libre + grid de preguntas pre-cargadas
     // ============================================================
+    // ============================================================
+    // HowItWorks — mini demo de uso (4 cards en la landing)
+    // ============================================================
+    const HOW_IT_WORKS_STEPS = [
+      {
+        n: "1",
+        title: "Escribe tu pregunta",
+        desc: "En español natural, escribe lo que tu negocio quiere saber. Ej: '¿Qué clientes están en riesgo de churn?'",
+        icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
+        color: "amber",
+      },
+      {
+        n: "2",
+        title: "Mira tu BD desarmada",
+        desc: "Aparecen las tablas que necesitas, marcadas verde (existe) / amarillo (decisión de diseño) / rojo (falta).",
+        icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>,
+        color: "emerald",
+      },
+      {
+        n: "3",
+        title: "Descubre tu dashboard",
+        desc: "Claude propone los gráficos (line, bar, funnel, heatmap) que tendrías si tu BD estuviera bien modelada.",
+        icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
+        color: "cyan",
+      },
+      {
+        n: "4",
+        title: "Decide arquitectura",
+        desc: "¿Calcular runtime, materializar, o snapshot? Con lente ML: ¿qué entrenar mañana con esta data?",
+        icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>,
+        color: "violet",
+      },
+    ];
+
+    const STEP_COLOR_CLASSES = {
+      amber:   { bg: "bg-amber-500/10",   border: "border-amber-500/30",   text: "text-amber-300",   nbg: "bg-amber-500/20"   },
+      emerald: { bg: "bg-emerald-500/10", border: "border-emerald-500/30", text: "text-emerald-300", nbg: "bg-emerald-500/20" },
+      cyan:    { bg: "bg-cyan-500/10",    border: "border-cyan-500/30",    text: "text-cyan-300",    nbg: "bg-cyan-500/20"    },
+      violet:  { bg: "bg-violet-500/10",  border: "border-violet-500/30",  text: "text-violet-300",  nbg: "bg-violet-500/20"  },
+    };
+
+    const HowItWorks = () => (
+      <div className="mt-10">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="h-px bg-zinc-800 flex-1"></div>
+          <div className="text-xs font-semibold text-zinc-500 tracking-widest">CÓMO FUNCIONA</div>
+          <div className="h-px bg-zinc-800 flex-1"></div>
+        </div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          {HOW_IT_WORKS_STEPS.map((s, i) => {
+            const c = STEP_COLOR_CLASSES[s.color];
+            return (
+              <div
+                key={s.n}
+                className={`${c.bg} border ${c.border} rounded-xl p-4 fade-in-up`}
+                style={{ animationDelay: `${i * 0.08}s` }}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <div className={`w-7 h-7 rounded-full ${c.nbg} ${c.text} flex items-center justify-center text-sm font-black flex-shrink-0`}>{s.n}</div>
+                  <div className={c.text}>{s.icon}</div>
+                </div>
+                <div className="text-base font-bold text-white leading-tight mb-1">{s.title}</div>
+                <div className="text-xs text-zinc-400 leading-snug">{s.desc}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+
     const LandingScreen = ({ activeSchema, apiKey, isAnalyzing, analyzeError, onAnalyze, onRequestKey, onPickQuestion }) => (
       <div className="fade-in-up">
         <div className="text-center py-8 sm:py-12">
           <div className="inline-block px-3 sm:px-4 py-1.5 rounded-full bg-amber-500/10 text-amber-300 text-[10px] sm:text-xs font-semibold tracking-widest mb-4 sm:mb-6 border border-amber-500/20">
-            {activeSchema ? `BD CUSTOM · ${activeSchema.name.toUpperCase()}` : "PRESTIGIO × CREARIA"}
+            {activeSchema ? `BD CUSTOM · ${activeSchema.name.toUpperCase()}` : "OPEN SOURCE · MIT"}
           </div>
           <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-black text-white mb-4 leading-tight sm:leading-none">
             La <span className="text-amber-400">pregunta</span> define
@@ -1609,7 +1676,7 @@ REGLAS:
           <p className="text-base sm:text-lg md:text-xl text-zinc-400 max-w-2xl mx-auto mt-4 sm:mt-6 px-2">
             {activeSchema
               ? `Estás analizando: ${activeSchema.name}. Escribe abajo cualquier pregunta sobre esta BD.`
-              : "Cinco preguntas sobre MIA. Dos totalmente verdes, tres con conversación pendiente. Elige una para empezar."
+              : "Cinco preguntas en cinco dominios distintos (e-commerce, SaaS, edtech, healthtech, CRM) — o pega tu propio esquema y pregunta sobre la BD de tu negocio."
             }
           </p>
           <p className="text-xs sm:text-sm text-zinc-600 italic mt-3 sm:mt-4 max-w-xl mx-auto px-2">
@@ -1617,7 +1684,9 @@ REGLAS:
           </p>
         </div>
 
-        <div className="mt-12">
+        {!activeSchema && <HowItWorks />}
+
+        <div className="mt-10">
           <FreeQuestionInput
             onAnalyze={onAnalyze}
             isAnalyzing={isAnalyzing}
@@ -1760,7 +1829,7 @@ REGLAS:
                   </div>
                   <div className="text-lg font-bold text-white group-hover:text-emerald-300">SQL (solo técnicos)</div>
                 </div>
-                <div className="text-sm text-zinc-500">Query ejecutable contra zona_ai</div>
+                <div className="text-sm text-zinc-500">Query ejecutable de ejemplo</div>
               </button>
             </div>
           </div>
@@ -1789,7 +1858,7 @@ REGLAS:
       if (openPanel === "sql") {
         return (
           <Panel icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>} title="SQL ejecutable" color="emerald" onClose={onClose}>
-            <div className="text-sm text-zinc-400 mb-4">Query contra <code className="text-emerald-400">zona_ai</code>, filtrado a <code className="text-emerald-400">tenants.slug = 'mia'</code>:</div>
+            <div className="text-sm text-zinc-400 mb-4">SQL razonable para responder la pregunta sobre el dominio detectado:</div>
             <pre className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 text-sm text-emerald-200 overflow-x-auto scrollbar-custom leading-relaxed">{question.sql}</pre>
           </Panel>
         );
@@ -2161,7 +2230,7 @@ REGLAS:
               <div onClick={reset} className="cursor-pointer flex items-center gap-2 sm:gap-3 group min-w-0">
                 <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-amber-500 flex items-center justify-center font-black text-zinc-950 text-lg sm:text-xl group-hover:scale-105 transition-transform flex-shrink-0">M</div>
                 <div className="min-w-0">
-                  <div className="text-base sm:text-lg font-bold text-white leading-tight truncate">Taller MIA</div>
+                  <div className="text-base sm:text-lg font-bold text-white leading-tight truncate">Question-First DB</div>
                   <div className="hidden sm:block text-xs text-zinc-500 truncate">La pregunta define el diseño de la BD</div>
                 </div>
               </div>
