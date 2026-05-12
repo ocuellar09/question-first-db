@@ -7,14 +7,35 @@
   <meta name="description" content="Webapp didáctica para enseñar diseño de bases de datos partiendo de preguntas de negocio reales. Carga tu DDL, descripción o imagen del ERD y descubre qué responde tu BD y qué falta — con análisis arquitectónico, lente ML y dashboards imaginados, todo via Claude API." />
   <meta name="author" content="CrearIA · Oscar Cuéllar" />
   <meta name="theme-color" content="#050505" />
+  <!--
+    Content-Security-Policy: restringe orígenes de scripts y, crítico, los destinos de fetch (connect-src).
+    Aunque haya XSS futuro, la API key en localStorage NO puede ser exfiltrada a un dominio externo —
+    fetch solo puede ir a api.anthropic.com, unpkg.com (sourcemaps de Babel) o 'self'.
+    'unsafe-eval' es necesario para Babel Standalone (transpila JSX en runtime).
+    'unsafe-inline' es necesario para Tailwind Play CDN y scripts type="text/babel" inline.
+    NOTA: frame-ancestors NO se puede setear via <meta> (spec del browser) — solo via HTTP header.
+    Si publicás en GitHub Pages o servís con Caddy/nginx, agregá: X-Frame-Options: DENY
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://api.anthropic.com https://unpkg.com https://fonts.googleapis.com https://fonts.gstatic.com; form-action 'self'; base-uri 'self';" />
   <meta property="og:type" content="website" />
   <meta property="og:title" content="La Pregunta Define la BD" />
   <meta property="og:description" content="Enseña diseño de BD partiendo de preguntas de negocio reales. Open source · MIT." />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%2310b981'/%3E%3Cstop offset='100%25' stop-color='%23f59e0b'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' rx='22' fill='url(%23g)'/%3E%3Ctext x='50' y='72' font-family='Inter,sans-serif' font-size='66' font-weight='900' text-anchor='middle' fill='%23050505'%3EM%3C/text%3E%3C/svg%3E" />
+  <!--
+    Tailwind Play CDN: decisión consciente (single-file sin build). NO usar en producción real.
+    Sin SRI porque el contenido cambia dinámicamente — riesgo aceptado.
+  -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- React, ReactDOM, Babel: versiones pineadas con SRI sha384 para protección de supply chain. -->
+  <script crossorigin="anonymous"
+          integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z"
+          src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin="anonymous"
+          integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1"
+          src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script crossorigin="anonymous"
+          integrity="sha384-x/ilTFv/u/eu6YSmkFDZl5V5Mm/pkxxcVv2cVJOrr1J0rvILhMvRBCy6yA75wYBj"
+          src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
   <script src="local-config.js" onerror="console.log('No local-config.js found — pega tu API key manualmente via el botón del header.')"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -104,6 +125,58 @@
 
   <script type="text/babel" data-presets="env,react">
     const { useState, useEffect, useRef, useMemo } = React;
+
+    // ============================================================
+    // CONSTANTES — config global del comportamiento de la app
+    // ============================================================
+    const REVEAL_TIMING_MS = {
+      greens:  1400,  // delay para mostrar entidades VERDES tras seleccionar pregunta
+      yellows: 2900,  // delay para sumar las AMARILLAS (decisión de diseño)
+      all:     4200,  // delay final para sumar ROJAS + botones de acción
+    };
+
+    const CLAUDE_API = {
+      url:     "https://api.anthropic.com/v1/messages",
+      version: "2023-06-01",
+      model:   "claude-sonnet-4-6",
+    };
+
+    // ============================================================
+    // callClaudeJSON — única función fetch a Claude, reutilizada
+    // por las 4 capas (analyze/architecture/visualization/schema)
+    // ============================================================
+    const callClaudeJSON = async ({ apiKey, system, userContent, maxTokens = 3000, useCache = false }) => {
+      const systemField = useCache && typeof system === "string"
+        ? [{ type: "text", text: system, cache_control: { type: "ephemeral" } }]
+        : system;
+      const response = await fetch(CLAUDE_API.url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": CLAUDE_API.version,
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({
+          model: CLAUDE_API.model,
+          max_tokens: maxTokens,
+          system: systemField,
+          messages: [{ role: "user", content: userContent }],
+        }),
+      });
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`API ${response.status}: ${errText.slice(0, 300)}`);
+      }
+      const data = await response.json();
+      const raw = (data.content?.[0]?.text || "").trim()
+        .replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "");
+      try {
+        return JSON.parse(raw);
+      } catch {
+        throw new Error(`No se pudo parsear el JSON de Claude. Texto crudo:\n${raw.slice(0, 500)}`);
+      }
+    };
 
     // ============================================================
     // DATA — Las preguntas pre-cargadas del taller
@@ -607,44 +680,19 @@ REGLAS DE PROCESAMIENTO:
     // processSchema — convierte DDL/texto/imagen en knowledge base
     // ============================================================
     const processSchema = async ({ type, text, image }, apiKey) => {
-      let userContent;
-      if (type === "image" && image) {
-        userContent = [
-          { type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } },
-          { type: "text", text: "Esta imagen es el diagrama/ERD de una base de datos. Analízalo y devuelve el JSON con name, summary, tablesCount y knowledgePrompt según el schema indicado en system." }
-        ];
-      } else {
-        const label = type === "ddl" ? "DDL/SQL" : "descripción libre";
-        userContent = `Esquema recibido (${label}):\n\n\`\`\`\n${text}\n\`\`\`\n\nDevuelve el JSON ahora.`;
-      }
+      const userContent = type === "image" && image
+        ? [
+            { type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } },
+            { type: "text", text: "Esta imagen es el diagrama/ERD de una base de datos. Analízalo y devuelve el JSON con name, summary, tablesCount y knowledgePrompt según el schema indicado en system." }
+          ]
+        : `Esquema recibido (${type === "ddl" ? "DDL/SQL" : "descripción libre"}):\n\n\`\`\`\n${text}\n\`\`\`\n\nDevuelve el JSON ahora.`;
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 4000,
-          system: SCHEMA_PROCESSING_PROMPT,
-          messages: [{ role: "user", content: userContent }]
-        })
+      const parsed = await callClaudeJSON({
+        apiKey,
+        system: SCHEMA_PROCESSING_PROMPT,
+        userContent,
+        maxTokens: 4000,
       });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`API ${response.status}: ${errText.slice(0, 300)}`);
-      }
-      const data = await response.json();
-      const rawText = data.content?.[0]?.text || "";
-      const cleaned = rawText.trim().replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "");
-
-      let parsed;
-      try { parsed = JSON.parse(cleaned); }
-      catch (e) { throw new Error(`No se pudo parsear el esquema. Texto crudo:\n${rawText.slice(0, 500)}`); }
 
       if (parsed.error) throw new Error(parsed.error);
       if (!parsed.knowledgePrompt) throw new Error("Respuesta sin knowledgePrompt válido.");
@@ -699,39 +747,15 @@ REGLAS:
       const userPayload = {
         question: question.text,
         entities: question.entities.map(e => ({
-          id: e.id,
-          status: e.status,
-          subtitle: e.subtitle,
-          columns: e.columns,
+          id: e.id, status: e.status, subtitle: e.subtitle, columns: e.columns,
         })),
       };
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 2500,
-          system: ARCHITECTURE_PROMPT + (customKnowledge ? "\n\n# CONTEXTO DE DOMINIO:\n" + customKnowledge.slice(0, 2000) : ""),
-          messages: [
-            { role: "user", content: `Análisis arquitectónico para:\n\n${JSON.stringify(userPayload, null, 2)}\n\nDevuelve el JSON ahora.` }
-          ]
-        })
+      const parsed = await callClaudeJSON({
+        apiKey,
+        system: ARCHITECTURE_PROMPT + (customKnowledge ? "\n\n# CONTEXTO DE DOMINIO:\n" + customKnowledge.slice(0, 2000) : ""),
+        userContent: `Análisis arquitectónico para:\n\n${JSON.stringify(userPayload, null, 2)}\n\nDevuelve el JSON ahora.`,
+        maxTokens: 2500,
       });
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`API ${response.status}: ${errText.slice(0, 300)}`);
-      }
-      const data = await response.json();
-      const rawText = data.content?.[0]?.text || "";
-      const cleaned = rawText.trim().replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "");
-      let parsed;
-      try { parsed = JSON.parse(cleaned); }
-      catch (e) { throw new Error(`No se pudo parsear el análisis. Texto crudo:\n${rawText.slice(0, 500)}`); }
       if (!parsed.items) parsed.items = [];
       return parsed;
     };
@@ -782,37 +806,14 @@ REGLAS:
     const analyzeVisualization = async (question, apiKey, customKnowledge = null) => {
       const userPayload = {
         question: question.text,
-        entities: question.entities.map(e => ({
-          id: e.id, status: e.status, subtitle: e.subtitle,
-        })),
+        entities: question.entities.map(e => ({ id: e.id, status: e.status, subtitle: e.subtitle })),
       };
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 2500,
-          system: VISUALIZATION_PROMPT + (customKnowledge ? "\n\n# CONTEXTO DE DOMINIO:\n" + customKnowledge.slice(0, 2000) : ""),
-          messages: [
-            { role: "user", content: `Dashboard imaginado para:\n\n${JSON.stringify(userPayload, null, 2)}\n\nDevuelve el JSON ahora.` }
-          ]
-        })
+      const parsed = await callClaudeJSON({
+        apiKey,
+        system: VISUALIZATION_PROMPT + (customKnowledge ? "\n\n# CONTEXTO DE DOMINIO:\n" + customKnowledge.slice(0, 2000) : ""),
+        userContent: `Dashboard imaginado para:\n\n${JSON.stringify(userPayload, null, 2)}\n\nDevuelve el JSON ahora.`,
+        maxTokens: 2500,
       });
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`API ${response.status}: ${errText.slice(0, 300)}`);
-      }
-      const data = await response.json();
-      const rawText = data.content?.[0]?.text || "";
-      const cleaned = rawText.trim().replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "");
-      let parsed;
-      try { parsed = JSON.parse(cleaned); }
-      catch (e) { throw new Error(`No se pudo parsear la visualización. Texto crudo:\n${rawText.slice(0, 500)}`); }
       if (!parsed.charts || !Array.isArray(parsed.charts)) parsed.charts = [];
       return parsed;
     };
@@ -821,54 +822,19 @@ REGLAS:
     // analyzeWithClaude — llama a Claude API desde el browser
     // ============================================================
     const analyzeWithClaude = async (questionText, apiKey, customKnowledge = null) => {
-      const systemKnowledge = customKnowledge || SCHEMA_KNOWLEDGE;
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 3000,
-          system: [
-            { type: "text", text: systemKnowledge, cache_control: { type: "ephemeral" } }
-          ],
-          messages: [
-            { role: "user", content: `Pregunta del cliente: "${questionText}"\n\nDevuelve el JSON ahora, sin nada más.` }
-          ]
-        })
+      const parsed = await callClaudeJSON({
+        apiKey,
+        system: customKnowledge || SCHEMA_KNOWLEDGE,
+        userContent: `Pregunta del cliente: "${questionText}"\n\nDevuelve el JSON ahora, sin nada más.`,
+        maxTokens: 3000,
+        useCache: true,
       });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`API ${response.status}: ${errText.slice(0, 300)}`);
-      }
-
-      const data = await response.json();
-      const rawText = data.content?.[0]?.text || "";
-
-      // Strip markdown code fences si Claude las metió
-      const cleaned = rawText.trim().replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "");
-
-      let parsed;
-      try {
-        parsed = JSON.parse(cleaned);
-      } catch (e) {
-        throw new Error(`No se pudo parsear el JSON de Claude. Texto crudo:\n${rawText.slice(0, 500)}`);
-      }
-
-      // Validación mínima de shape
       if (!parsed.entities || !Array.isArray(parsed.entities) || parsed.entities.length === 0) {
         throw new Error("Claude devolvió una respuesta sin entidades válidas.");
       }
-
-      // Asignar id único e identificarla como live
       parsed.id = `live-${Date.now()}`;
       parsed.title = parsed.title || "Pregunta del cliente";
-
       return parsed;
     };
 
@@ -1566,6 +1532,20 @@ REGLAS:
               )}
             </div>
 
+            <div className="px-6 pt-4 pb-2 border-t border-zinc-800 flex-shrink-0">
+              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg flex items-start gap-3">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-amber-300 flex-shrink-0 mt-0.5">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                  <line x1="12" y1="9" x2="12" y2="13"/>
+                  <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+                <div className="text-xs text-amber-100 leading-relaxed">
+                  <strong className="text-amber-200">Ojo:</strong> el contenido que pegas (DDL, descripción o imagen) se envía a la API de <strong>Anthropic</strong> para procesarlo.
+                  <strong className="block mt-1 text-amber-200">NO subas data real de clientes</strong> — anonimiza nombres, borra comentarios sensibles, redacta valores PII. Si es un screenshot, asegúrate que no tenga datos reales.
+                </div>
+              </div>
+            </div>
+
             <div className="px-6 py-4 border-t border-zinc-800 flex gap-3 flex-shrink-0">
               <button
                 onClick={submit}
@@ -1612,6 +1592,393 @@ REGLAS:
       </div>
     );
 
+    // ============================================================
+    // LandingScreen — pantalla inicial (sin pregunta seleccionada)
+    // Hero + input libre + grid de preguntas pre-cargadas
+    // ============================================================
+    const LandingScreen = ({ activeSchema, apiKey, isAnalyzing, analyzeError, onAnalyze, onRequestKey, onPickQuestion }) => (
+      <div className="fade-in-up">
+        <div className="text-center py-8 sm:py-12">
+          <div className="inline-block px-3 sm:px-4 py-1.5 rounded-full bg-amber-500/10 text-amber-300 text-[10px] sm:text-xs font-semibold tracking-widest mb-4 sm:mb-6 border border-amber-500/20">
+            {activeSchema ? `BD CUSTOM · ${activeSchema.name.toUpperCase()}` : "PRESTIGIO × CREARIA"}
+          </div>
+          <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-black text-white mb-4 leading-tight sm:leading-none">
+            La <span className="text-amber-400">pregunta</span> define
+            <br />el <span className="text-emerald-400">diseño</span> de tu base de datos
+          </h1>
+          <p className="text-base sm:text-lg md:text-xl text-zinc-400 max-w-2xl mx-auto mt-4 sm:mt-6 px-2">
+            {activeSchema
+              ? `Estás analizando: ${activeSchema.name}. Escribe abajo cualquier pregunta sobre esta BD.`
+              : "Cinco preguntas sobre MIA. Dos totalmente verdes, tres con conversación pendiente. Elige una para empezar."
+            }
+          </p>
+          <p className="text-xs sm:text-sm text-zinc-600 italic mt-3 sm:mt-4 max-w-xl mx-auto px-2">
+            "El SQL es la última decisión, no la primera."
+          </p>
+        </div>
+
+        <div className="mt-12">
+          <FreeQuestionInput
+            onAnalyze={onAnalyze}
+            isAnalyzing={isAnalyzing}
+            hasKey={!!apiKey}
+            onRequestKey={onRequestKey}
+            error={analyzeError}
+            contextLabel={activeSchema ? `EN VIVO — PREGUNTA SOBRE ${activeSchema.name.toUpperCase()}` : undefined}
+            placeholder={activeSchema
+              ? `Escribe una pregunta de negocio sobre ${activeSchema.name}. Ej: '¿Cuántos pedidos completaron las últimas 24h?' o '¿Qué clientes están en riesgo de churn?'`
+              : undefined
+            }
+          />
+        </div>
+
+        {!activeSchema && (
+          <>
+            <div className="flex items-center gap-3 mt-10 mb-5">
+              <div className="h-px bg-zinc-800 flex-1"></div>
+              <div className="text-xs font-semibold text-zinc-500 tracking-widest">O ELIGE UNA PRE-CARGADA</div>
+              <div className="h-px bg-zinc-800 flex-1"></div>
+            </div>
+            <div className="grid md:grid-cols-2 gap-4">
+              {QUESTIONS.map((q, i) => {
+                const greens  = q.entities.filter(e => e.status === "existing").length;
+                const yellows = q.entities.filter(e => e.status === "design").length;
+                const reds    = q.entities.filter(e => e.status === "missing").length;
+                return (
+                  <button
+                    key={q.id}
+                    onClick={() => onPickQuestion(q.id)}
+                    className="text-left bg-zinc-900/50 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-600 rounded-2xl p-6 transition-all group fade-in-up"
+                    style={{ animationDelay: `${i * 0.08}s` }}
+                  >
+                    <div className="text-xs font-semibold text-zinc-500 tracking-widest mb-2">{q.title.toUpperCase()}</div>
+                    <p className="text-lg font-semibold text-white leading-snug group-hover:text-amber-200 transition-colors">{q.text}</p>
+                    <div className="flex items-center gap-2 mt-4 flex-wrap">
+                      {greens  > 0 && <span className="text-xs bg-emerald-500/20 text-emerald-300 px-2 py-1 rounded-full">{greens} verdes</span>}
+                      {yellows > 0 && <span className="text-xs bg-amber-500/20 text-amber-300 px-2 py-1 rounded-full">{yellows} amarillas</span>}
+                      {reds    > 0 && <span className="text-xs bg-red-500/20 text-red-300 px-2 py-1 rounded-full">{reds} faltantes</span>}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+    );
+
+    // ============================================================
+    // QuestionRevealScreen — pantalla con pregunta seleccionada
+    // Pregunta + PlainSummary + Canvas animado + grid de 5 botones
+    // ============================================================
+    const QuestionRevealScreen = ({
+      question, stage,
+      isAnalyzingArch, isAnalyzingViz,
+      hasYellows, hasReds,
+      onOpenPanel, onOpenArchitecture, onOpenVisualization,
+    }) => (
+      <div className="space-y-8">
+        <div className="fade-in-up">
+          <div className="text-xs font-semibold text-amber-400 tracking-widest mb-3">{question.title.toUpperCase()}</div>
+          <HighlightedQuestion text={question.text} keywords={question.keywords} />
+        </div>
+
+        {stage >= 1 && question.plainSummary && (
+          <PlainSummary summary={question.plainSummary} />
+        )}
+
+        {stage >= 2 && (
+          <div className="fade-in-up">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="h-px bg-zinc-800 flex-1"></div>
+              <div className="text-xs font-semibold text-zinc-500 tracking-widest">
+                {stage === 2 && "PASO 1 — LO QUE LA BD YA TIENE"}
+                {stage === 3 && "PASO 2 — DECISIONES DE DISEÑO"}
+                {stage >= 4 && "PASO 3 — MAPA COMPLETO"}
+              </div>
+              <div className="h-px bg-zinc-800 flex-1"></div>
+            </div>
+            <Canvas question={question} stage={stage} />
+          </div>
+        )}
+
+        {stage >= 4 && (
+          <div className="fade-in-up space-y-4 pt-4">
+            <button onClick={() => onOpenPanel("translation")} className="w-full bg-gradient-to-r from-amber-500/20 to-amber-500/5 hover:from-amber-500/30 hover:to-amber-500/10 border-2 border-amber-500/50 rounded-2xl p-6 text-left transition-all group flex items-center gap-5">
+              <div className="w-14 h-14 rounded-full bg-amber-500/20 flex items-center justify-center text-amber-300 flex-shrink-0">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              </div>
+              <div className="flex-1">
+                <div className="text-2xl md:text-3xl font-black text-white group-hover:text-amber-200 leading-tight">EN CRISTIANO</div>
+                <div className="text-base text-zinc-300 mt-1">Qué significa todo esto, con un ejemplo concreto que cualquiera entiende</div>
+              </div>
+              <div className="text-amber-400 text-3xl flex-shrink-0">→</div>
+            </button>
+            <div className="grid sm:grid-cols-2 gap-4">
+              <button onClick={onOpenArchitecture} className="bg-gradient-to-br from-violet-500/15 to-violet-500/5 hover:from-violet-500/25 hover:to-violet-500/10 border border-violet-500/40 hover:border-violet-500/70 rounded-xl p-5 text-left transition-all group">
+                <div className="flex items-center gap-3 mb-2 flex-wrap">
+                  <div className="text-violet-300 flex-shrink-0">
+                    {isAnalyzingArch
+                      ? <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="animate-spin"><circle cx="12" cy="12" r="10" opacity="0.25"/><path d="M22 12a10 10 0 0 1-10 10"/></svg>
+                      : <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>}
+                  </div>
+                  <div className="text-lg font-bold text-white group-hover:text-violet-200 leading-tight">¿Guardar o calcular?</div>
+                  <div className="ml-auto text-[10px] font-bold tracking-widest text-violet-300/80 px-2 py-0.5 bg-violet-500/20 rounded-full">+ML</div>
+                </div>
+                <div className="text-sm text-zinc-400">{isAnalyzingArch ? "Claude analizando..." : "Arquitectura recomendada con lente ML-ready"}</div>
+              </button>
+              <button onClick={onOpenVisualization} className="bg-gradient-to-br from-cyan-500/15 to-cyan-500/5 hover:from-cyan-500/25 hover:to-cyan-500/10 border border-cyan-500/40 hover:border-cyan-500/70 rounded-xl p-5 text-left transition-all group">
+                <div className="flex items-center gap-3 mb-2 flex-wrap">
+                  <div className="text-cyan-300 flex-shrink-0">
+                    {isAnalyzingViz
+                      ? <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="animate-spin"><circle cx="12" cy="12" r="10" opacity="0.25"/><path d="M22 12a10 10 0 0 1-10 10"/></svg>
+                      : <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>}
+                  </div>
+                  <div className="text-lg font-bold text-white group-hover:text-cyan-200 leading-tight">Dashboard imaginado</div>
+                </div>
+                <div className="text-sm text-zinc-400">{isAnalyzingViz ? "Claude diseñando charts..." : "Qué gráficos tendrías si modelas bien"}</div>
+              </button>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-4">
+              <button
+                onClick={() => onOpenPanel("gaps")}
+                disabled={!hasYellows && !hasReds}
+                className={`border rounded-xl p-5 text-left transition-all group ${(!hasYellows && !hasReds) ? "bg-zinc-900/30 border-zinc-900 opacity-40 cursor-not-allowed" : "bg-zinc-900 hover:bg-zinc-800 border-zinc-700"}`}
+              >
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="text-red-400">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  </div>
+                  <div className="text-lg font-bold text-white group-hover:text-red-300">¿Qué falta?</div>
+                </div>
+                <div className="text-sm text-zinc-500">{(!hasYellows && !hasReds) ? "Esta pregunta no tiene gaps" : "Roadmap de datos para responderla 100%"}</div>
+              </button>
+              <button onClick={() => onOpenPanel("sql")} className="bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-xl p-5 text-left transition-all group">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="text-emerald-400">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                  </div>
+                  <div className="text-lg font-bold text-white group-hover:text-emerald-300">SQL (solo técnicos)</div>
+                </div>
+                <div className="text-sm text-zinc-500">Query ejecutable contra zona_ai</div>
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+
+    // ============================================================
+    // PanelManager — todos los modales lazy según openPanel
+    // ============================================================
+    const ARCH_REC_MAP = {
+      runtime:     { label: "CALCULAR RUNTIME",  bg: "bg-sky-500/15",     border: "border-sky-500/40",     text: "text-sky-300",     subtitle: "Sin persistir — backend lo calcula al vuelo" },
+      materialize: { label: "MATERIALIZAR",      bg: "bg-emerald-500/15", border: "border-emerald-500/40", text: "text-emerald-300", subtitle: "Columna o tabla con valor actual persistido" },
+      snapshot:    { label: "SNAPSHOT HISTÓRICO",bg: "bg-amber-500/15",   border: "border-amber-500/40",   text: "text-amber-300",   subtitle: "Append-only con timestamps para historia y ML" },
+      new_rule:    { label: "REGLA / TRIGGER",   bg: "bg-violet-500/15",  border: "border-violet-500/40",  text: "text-violet-300",  subtitle: "Lógica de negocio en backend (cron/trigger)" },
+    };
+    const ARCH_ML_MAP = {
+      critical: { label: "ML: CRÍTICO", color: "bg-red-500/20 text-red-300 border-red-500/40" },
+      useful:   { label: "ML: ÚTIL",     color: "bg-amber-500/20 text-amber-300 border-amber-500/40" },
+      low:      { label: "ML: BAJO",     color: "bg-zinc-700/50 text-zinc-400 border-zinc-700" },
+    };
+
+    const PanelManager = ({ openPanel, onClose, question, currentArchitecture, currentVisualization, archError, vizError }) => {
+      if (!openPanel || !question) return null;
+
+      if (openPanel === "sql") {
+        return (
+          <Panel icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>} title="SQL ejecutable" color="emerald" onClose={onClose}>
+            <div className="text-sm text-zinc-400 mb-4">Query contra <code className="text-emerald-400">zona_ai</code>, filtrado a <code className="text-emerald-400">tenants.slug = 'mia'</code>:</div>
+            <pre className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 text-sm text-emerald-200 overflow-x-auto scrollbar-custom leading-relaxed">{question.sql}</pre>
+          </Panel>
+        );
+      }
+
+      if (openPanel === "translation") {
+        return (
+          <Panel icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>} title="En cristiano" color="amber" onClose={onClose}>
+            {question.concreteExample && (
+              <div className="mb-6 p-6 bg-gradient-to-br from-emerald-500/15 to-emerald-500/5 border-2 border-emerald-500/40 rounded-2xl">
+                <div className="text-xs font-bold text-emerald-400 tracking-widest mb-3 flex items-center gap-2">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="12" cy="12" r="10"/><polyline points="8 12 11 15 16 9"/></svg>
+                  EJEMPLO CONCRETO
+                </div>
+                <p className="text-xl text-white leading-relaxed font-medium">{question.concreteExample}</p>
+              </div>
+            )}
+            <div className="mb-6">
+              <div className="text-xs font-bold text-zinc-400 tracking-widest mb-3">QUÉ SIGNIFICA TODO ESTO</div>
+              <p className="text-lg text-zinc-100 leading-relaxed">{question.translation}</p>
+            </div>
+            {question.designDecision && (
+              <div className="p-5 bg-amber-500/10 border border-amber-500/30 rounded-2xl">
+                <div className="text-xs font-bold text-amber-400 tracking-widest mb-2">PRÓXIMO PASO DE PRODUCTO</div>
+                <p className="text-white leading-relaxed">{question.designDecision}</p>
+              </div>
+            )}
+          </Panel>
+        );
+      }
+
+      if (openPanel === "visualization") {
+        return (
+          <Panel
+            icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>}
+            title="Dashboard imaginado"
+            color="emerald"
+            onClose={onClose}
+          >
+            {vizError && (
+              <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-300 mb-4">
+                <strong>Error:</strong> {vizError}
+              </div>
+            )}
+            {currentVisualization && (
+              <div className="space-y-5">
+                <div className="p-5 bg-gradient-to-br from-cyan-500/15 to-cyan-500/5 border-2 border-cyan-500/40 rounded-2xl">
+                  <div className="text-xs font-bold text-cyan-300 tracking-widest mb-3">SI LA BD ESTÁ BIEN MODELADA, TENDRÍAS ESTE DASHBOARD</div>
+                  <p className="text-lg text-white leading-relaxed font-medium">{currentVisualization.summary}</p>
+                </div>
+                {currentVisualization.charts && currentVisualization.charts.length > 0 ? (
+                  <div className="space-y-5">
+                    {currentVisualization.charts.map((chart, i) => (
+                      <div key={i} className="p-5 sm:p-6 bg-zinc-900/60 border border-zinc-800 rounded-2xl">
+                        <div className="flex items-start justify-between mb-4 flex-wrap gap-2">
+                          <div>
+                            <div className="text-xl font-bold text-white leading-tight">{chart.title}</div>
+                            {chart.subtitle && <div className="text-sm text-zinc-500 mt-1">{chart.subtitle}</div>}
+                          </div>
+                          <div className="text-[10px] font-bold tracking-widest text-cyan-300/70 bg-cyan-500/10 border border-cyan-500/20 px-2.5 py-1 rounded-full uppercase">
+                            {chart.chartType.replace("_", " ")}
+                          </div>
+                        </div>
+                        <div className="bg-zinc-950/60 rounded-xl p-3 sm:p-4 border border-zinc-800/60">
+                          <MiniChart chart={chart} />
+                        </div>
+                        {chart.insight && (
+                          <div className="mt-4 p-3 bg-cyan-500/10 border-l-4 border-cyan-500/60 rounded-r-lg">
+                            <div className="text-[10px] font-bold text-cyan-300 tracking-widest mb-1">INSIGHT ACCIONABLE</div>
+                            <p className="text-sm text-zinc-100 leading-relaxed">{chart.insight}</p>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : !vizError && (
+                  <div className="p-5 bg-zinc-900 border border-zinc-800 rounded-2xl text-zinc-400">
+                    No se generaron gráficos para esta pregunta.
+                  </div>
+                )}
+                <div className="p-4 bg-amber-500/5 border border-amber-500/20 rounded-xl text-xs text-zinc-400">
+                  <strong className="text-amber-300">Nota:</strong> los datos son MOCK realistas generados por Claude. El dashboard real requiere que la BD del cliente persista las features según la decisión arquitectónica del botón "¿Guardar o calcular?".
+                </div>
+              </div>
+            )}
+          </Panel>
+        );
+      }
+
+      if (openPanel === "architecture") {
+        return (
+          <Panel
+            icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>}
+            title="¿Guardar o calcular? + lente ML"
+            color="emerald"
+            onClose={onClose}
+          >
+            {archError && (
+              <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-300 mb-4">
+                <strong>Error:</strong> {archError}
+              </div>
+            )}
+            {currentArchitecture && (
+              <div className="space-y-5">
+                <div className="p-5 bg-gradient-to-br from-violet-500/15 to-violet-500/5 border-2 border-violet-500/40 rounded-2xl">
+                  <div className="text-xs font-bold text-violet-300 tracking-widest mb-3">DECISIÓN ARQUITECTÓNICA CLAVE</div>
+                  <p className="text-lg text-white leading-relaxed font-medium">{currentArchitecture.summary}</p>
+                </div>
+                {currentArchitecture.items && currentArchitecture.items.length > 0 ? (
+                  <div className="space-y-4">
+                    {currentArchitecture.items.map((item, i) => {
+                      const rec = ARCH_REC_MAP[item.recommendation] || ARCH_REC_MAP.materialize;
+                      const mlBadge = ARCH_ML_MAP[item.mlRelevance] || ARCH_ML_MAP.low;
+                      return (
+                        <div key={i} className={`p-5 ${rec.bg} border ${rec.border} rounded-2xl`}>
+                          <div className="flex items-center gap-3 mb-3 flex-wrap">
+                            <code className={`${rec.text} font-bold text-base`}>{item.entityId}</code>
+                            <div className={`px-3 py-1 rounded-full text-xs font-bold tracking-widest ${rec.text} ${rec.bg} border ${rec.border}`}>
+                              → {rec.label}
+                            </div>
+                            <div className={`px-2.5 py-1 rounded-full text-[10px] font-bold tracking-widest border ${mlBadge.color}`}>
+                              {mlBadge.label}
+                            </div>
+                          </div>
+                          <div className={`text-xs ${rec.text} opacity-70 mb-2 italic`}>{rec.subtitle}</div>
+                          <p className="text-white leading-relaxed mb-3">{item.reasoning}</p>
+                          {item.mlContext && item.mlRelevance !== "low" && (
+                            <div className="mt-3 p-3 bg-zinc-950/40 border border-zinc-800 rounded-xl">
+                              <div className="text-[10px] font-bold text-zinc-500 tracking-widest mb-1">QUÉ MODELO SE BENEFICIA</div>
+                              <p className="text-sm text-zinc-200 leading-relaxed">{item.mlContext}</p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="p-5 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl">
+                    <div className="text-xs font-bold text-emerald-400 tracking-widest mb-2">SIN DECISIONES PENDIENTES</div>
+                    <p className="text-white leading-relaxed">Esta pregunta no tiene gaps arquitectónicos. Las tablas involucradas ya están materializadas correctamente. El próximo paso natural está en el resumen de arriba.</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </Panel>
+        );
+      }
+
+      if (openPanel === "gaps") {
+        return (
+          <Panel icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>} title="¿Qué falta? — Roadmap" color="red" onClose={onClose}>
+            <div className="space-y-4">
+              {question.entities.filter(e => e.status === "design").map(e => (
+                <div key={e.id} className="p-5 bg-amber-500/10 border border-amber-500/30 rounded-2xl">
+                  <div className="flex items-center gap-3 mb-2">
+                    <StatusBadge status="design" />
+                    <code className="text-amber-300 font-bold">{e.label}</code>
+                  </div>
+                  <div className="text-white text-lg font-semibold mb-1">{e.subtitle}</div>
+                  <div className="text-zinc-400 text-sm">Existe la tabla, pero el dato vive en un formato que no permite analítica directa. Es decisión de producto, no falla.</div>
+                </div>
+              ))}
+              {question.entities.filter(e => e.status === "missing").map(e => (
+                <div key={e.id} className="p-5 bg-red-500/10 border border-red-500/30 border-dashed rounded-2xl">
+                  <div className="flex items-center gap-3 mb-2">
+                    <StatusBadge status="missing" />
+                    <code className="text-red-300 font-bold">{e.label}</code>
+                  </div>
+                  <div className="text-white text-lg font-semibold mb-2">{e.subtitle}</div>
+                  <div className="text-zinc-300 text-sm mb-3">Estructura propuesta:</div>
+                  <ul className="space-y-1">
+                    {e.columns.map((c, i) => <li key={i} className="text-xs text-zinc-300 font-mono">• {c}</li>)}
+                  </ul>
+                </div>
+              ))}
+              {question.designDecision && (
+                <div className="p-5 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl">
+                  <div className="text-xs font-bold text-emerald-400 tracking-widest mb-2">DECISIÓN A TOMAR CON EL CLIENTE</div>
+                  <p className="text-white leading-relaxed">{question.designDecision}</p>
+                </div>
+              )}
+            </div>
+          </Panel>
+        );
+      }
+
+      return null;
+    };
+
     const App = () => {
       const [selectedId, setSelectedId] = useState(null);
       const [stage, setStage] = useState(0); // 0=picker, 1=question shown, 2=greens, 3=+yellows, 4=+reds
@@ -1649,19 +2016,35 @@ REGLAS:
       const [isAnalyzingViz, setIsAnalyzingViz] = useState(false);
       const [vizError, setVizError] = useState(null);
 
+      const revealTimers = useRef([]);
+      const clearRevealTimers = () => {
+        revealTimers.current.forEach(clearTimeout);
+        revealTimers.current = [];
+      };
+      // Limpiar timers pendientes si el componente se desmonta a mitad de la animación
+      useEffect(() => clearRevealTimers, []);
+
       const question = selectedId && selectedId.startsWith("live-")
         ? liveQuestion
         : QUESTIONS.find(q => q.id === selectedId);
 
-      const reset = () => { setSelectedId(null); setStage(0); setOpenPanel(null); };
+      const reset = () => {
+        clearRevealTimers();
+        setSelectedId(null); setStage(0); setOpenPanel(null);
+      };
 
       const startReveal = (id) => {
+        // Cancelar cualquier reveal en curso para evitar timeouts viejos
+        // disparando setStage sobre una pregunta nueva (race condition).
+        clearRevealTimers();
         setSelectedId(id);
         setStage(1);
         setOpenPanel(null);
-        setTimeout(() => setStage(2), 1400);
-        setTimeout(() => setStage(3), 2900);
-        setTimeout(() => setStage(4), 4200);
+        revealTimers.current = [
+          setTimeout(() => setStage(2), REVEAL_TIMING_MS.greens),
+          setTimeout(() => setStage(3), REVEAL_TIMING_MS.yellows),
+          setTimeout(() => setStage(4), REVEAL_TIMING_MS.all),
+        ];
       };
 
       const pickQuestion = (id) => startReveal(id);
@@ -1819,376 +2202,41 @@ REGLAS:
 
           <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
             {!question && (
-              <div className="fade-in-up">
-                <div className="text-center py-8 sm:py-12">
-                  <div className="inline-block px-3 sm:px-4 py-1.5 rounded-full bg-amber-500/10 text-amber-300 text-[10px] sm:text-xs font-semibold tracking-widest mb-4 sm:mb-6 border border-amber-500/20">
-                    {activeSchema ? `BD CUSTOM · ${activeSchema.name.toUpperCase()}` : "PRESTIGIO × CREARIA"}
-                  </div>
-                  <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-black text-white mb-4 leading-tight sm:leading-none">
-                    La <span className="text-amber-400">pregunta</span> define
-                    <br />el <span className="text-emerald-400">diseño</span> de tu base de datos
-                  </h1>
-                  <p className="text-base sm:text-lg md:text-xl text-zinc-400 max-w-2xl mx-auto mt-4 sm:mt-6 px-2">
-                    {activeSchema
-                      ? `Estás analizando: ${activeSchema.name}. Escribe abajo cualquier pregunta sobre esta BD.`
-                      : "Cinco preguntas sobre MIA. Dos totalmente verdes, tres con conversación pendiente. Elige una para empezar."
-                    }
-                  </p>
-                  <p className="text-xs sm:text-sm text-zinc-600 italic mt-3 sm:mt-4 max-w-xl mx-auto px-2">
-                    "El SQL es la última decisión, no la primera."
-                  </p>
-                </div>
-
-                <div className="mt-12">
-                  <FreeQuestionInput
-                    onAnalyze={handleAnalyze}
-                    isAnalyzing={isAnalyzing}
-                    hasKey={!!apiKey}
-                    onRequestKey={() => setShowKeyModal(true)}
-                    error={analyzeError}
-                    contextLabel={activeSchema ? `EN VIVO — PREGUNTA SOBRE ${activeSchema.name.toUpperCase()}` : undefined}
-                    placeholder={activeSchema
-                      ? `Escribe una pregunta de negocio sobre ${activeSchema.name}. Ej: '¿Cuántos pedidos completaron las últimas 24h?' o '¿Qué clientes están en riesgo de churn?'`
-                      : undefined
-                    }
-                  />
-                </div>
-
-                {!activeSchema && (
-                <>
-                <div className="flex items-center gap-3 mt-10 mb-5">
-                  <div className="h-px bg-zinc-800 flex-1"></div>
-                  <div className="text-xs font-semibold text-zinc-500 tracking-widest">O ELIGE UNA PRE-CARGADA</div>
-                  <div className="h-px bg-zinc-800 flex-1"></div>
-                </div>
-
-                <div className="grid md:grid-cols-2 gap-4">
-                  {QUESTIONS.map((q, i) => {
-                    const greens  = q.entities.filter(e => e.status === "existing").length;
-                    const yellows = q.entities.filter(e => e.status === "design").length;
-                    const reds    = q.entities.filter(e => e.status === "missing").length;
-                    return (
-                      <button
-                        key={q.id}
-                        onClick={() => pickQuestion(q.id)}
-                        className="text-left bg-zinc-900/50 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-600 rounded-2xl p-6 transition-all group fade-in-up"
-                        style={{ animationDelay: `${i * 0.08}s` }}
-                      >
-                        <div className="text-xs font-semibold text-zinc-500 tracking-widest mb-2">{q.title.toUpperCase()}</div>
-                        <p className="text-lg font-semibold text-white leading-snug group-hover:text-amber-200 transition-colors">
-                          {q.text}
-                        </p>
-                        <div className="flex items-center gap-2 mt-4 flex-wrap">
-                          {greens  > 0 && <span className="text-xs bg-emerald-500/20 text-emerald-300 px-2 py-1 rounded-full">{greens} verdes</span>}
-                          {yellows > 0 && <span className="text-xs bg-amber-500/20 text-amber-300 px-2 py-1 rounded-full">{yellows} amarillas</span>}
-                          {reds    > 0 && <span className="text-xs bg-red-500/20 text-red-300 px-2 py-1 rounded-full">{reds} faltantes</span>}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-                </>
-                )}
-              </div>
+              <LandingScreen
+                activeSchema={activeSchema}
+                apiKey={apiKey}
+                isAnalyzing={isAnalyzing}
+                analyzeError={analyzeError}
+                onAnalyze={handleAnalyze}
+                onRequestKey={() => setShowKeyModal(true)}
+                onPickQuestion={pickQuestion}
+              />
             )}
 
             {question && (
-              <div className="space-y-8">
-                <div className="fade-in-up">
-                  <div className="text-xs font-semibold text-amber-400 tracking-widest mb-3">{question.title.toUpperCase()}</div>
-                  <HighlightedQuestion text={question.text} keywords={question.keywords} />
-                </div>
-
-                {stage >= 1 && question.plainSummary && (
-                  <PlainSummary summary={question.plainSummary} />
-                )}
-
-                {stage >= 2 && (
-                  <div className="fade-in-up">
-                    <div className="flex items-center gap-3 mb-4">
-                      <div className="h-px bg-zinc-800 flex-1"></div>
-                      <div className="text-xs font-semibold text-zinc-500 tracking-widest">
-                        {stage === 2 && "PASO 1 — LO QUE LA BD YA TIENE"}
-                        {stage === 3 && "PASO 2 — DECISIONES DE DISEÑO"}
-                        {stage >= 4 && "PASO 3 — MAPA COMPLETO"}
-                      </div>
-                      <div className="h-px bg-zinc-800 flex-1"></div>
-                    </div>
-                    <Canvas question={question} stage={stage} />
-                  </div>
-                )}
-
-                {stage >= 4 && (
-                  <div className="fade-in-up space-y-4 pt-4">
-                    <button onClick={() => setOpenPanel("translation")} className="w-full bg-gradient-to-r from-amber-500/20 to-amber-500/5 hover:from-amber-500/30 hover:to-amber-500/10 border-2 border-amber-500/50 rounded-2xl p-6 text-left transition-all group flex items-center gap-5">
-                      <div className="w-14 h-14 rounded-full bg-amber-500/20 flex items-center justify-center text-amber-300 flex-shrink-0">
-                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                      </div>
-                      <div className="flex-1">
-                        <div className="text-2xl md:text-3xl font-black text-white group-hover:text-amber-200 leading-tight">EN CRISTIANO</div>
-                        <div className="text-base text-zinc-300 mt-1">Qué significa todo esto, con un ejemplo concreto que cualquiera entiende</div>
-                      </div>
-                      <div className="text-amber-400 text-3xl flex-shrink-0">→</div>
-                    </button>
-                    <div className="grid sm:grid-cols-2 gap-4">
-                      <button
-                        onClick={handleOpenArchitecture}
-                        className="bg-gradient-to-br from-violet-500/15 to-violet-500/5 hover:from-violet-500/25 hover:to-violet-500/10 border border-violet-500/40 hover:border-violet-500/70 rounded-xl p-5 text-left transition-all group"
-                      >
-                        <div className="flex items-center gap-3 mb-2 flex-wrap">
-                          <div className="text-violet-300 flex-shrink-0">
-                            {isAnalyzingArch ? (
-                              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="animate-spin"><circle cx="12" cy="12" r="10" opacity="0.25"/><path d="M22 12a10 10 0 0 1-10 10"/></svg>
-                            ) : (
-                              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
-                            )}
-                          </div>
-                          <div className="text-lg font-bold text-white group-hover:text-violet-200 leading-tight">¿Guardar o calcular?</div>
-                          <div className="ml-auto text-[10px] font-bold tracking-widest text-violet-300/80 px-2 py-0.5 bg-violet-500/20 rounded-full">+ML</div>
-                        </div>
-                        <div className="text-sm text-zinc-400">{isAnalyzingArch ? "Claude analizando..." : "Arquitectura recomendada con lente ML-ready"}</div>
-                      </button>
-                      <button
-                        onClick={handleOpenVisualization}
-                        className="bg-gradient-to-br from-cyan-500/15 to-cyan-500/5 hover:from-cyan-500/25 hover:to-cyan-500/10 border border-cyan-500/40 hover:border-cyan-500/70 rounded-xl p-5 text-left transition-all group"
-                      >
-                        <div className="flex items-center gap-3 mb-2 flex-wrap">
-                          <div className="text-cyan-300 flex-shrink-0">
-                            {isAnalyzingViz ? (
-                              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="animate-spin"><circle cx="12" cy="12" r="10" opacity="0.25"/><path d="M22 12a10 10 0 0 1-10 10"/></svg>
-                            ) : (
-                              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-                            )}
-                          </div>
-                          <div className="text-lg font-bold text-white group-hover:text-cyan-200 leading-tight">Dashboard imaginado</div>
-                        </div>
-                        <div className="text-sm text-zinc-400">{isAnalyzingViz ? "Claude diseñando charts..." : "Qué gráficos tendrías si modelas bien"}</div>
-                      </button>
-                    </div>
-                    <div className="grid sm:grid-cols-2 gap-4">
-                      <button
-                        onClick={() => setOpenPanel("gaps")}
-                        disabled={!hasYellows && !hasReds}
-                        className={`border rounded-xl p-5 text-left transition-all group ${(!hasYellows && !hasReds) ? "bg-zinc-900/30 border-zinc-900 opacity-40 cursor-not-allowed" : "bg-zinc-900 hover:bg-zinc-800 border-zinc-700"}`}
-                      >
-                        <div className="flex items-center gap-3 mb-2">
-                          <div className="text-red-400">
-                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                          </div>
-                          <div className="text-lg font-bold text-white group-hover:text-red-300">¿Qué falta?</div>
-                        </div>
-                        <div className="text-sm text-zinc-500">{(!hasYellows && !hasReds) ? "Esta pregunta no tiene gaps" : "Roadmap de datos para responderla 100%"}</div>
-                      </button>
-                      <button onClick={() => setOpenPanel("sql")} className="bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-xl p-5 text-left transition-all group">
-                        <div className="flex items-center gap-3 mb-2">
-                          <div className="text-emerald-400">
-                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-                          </div>
-                          <div className="text-lg font-bold text-white group-hover:text-emerald-300">SQL (solo técnicos)</div>
-                        </div>
-                        <div className="text-sm text-zinc-500">Query ejecutable contra zona_ai</div>
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
+              <QuestionRevealScreen
+                question={question}
+                stage={stage}
+                isAnalyzingArch={isAnalyzingArch}
+                isAnalyzingViz={isAnalyzingViz}
+                hasYellows={hasYellows}
+                hasReds={hasReds}
+                onOpenPanel={setOpenPanel}
+                onOpenArchitecture={handleOpenArchitecture}
+                onOpenVisualization={handleOpenVisualization}
+              />
             )}
           </main>
 
-          {openPanel === "sql" && question && (
-            <Panel icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>} title="SQL ejecutable" color="emerald" onClose={() => setOpenPanel(null)}>
-              <div className="text-sm text-zinc-400 mb-4">Query contra <code className="text-emerald-400">zona_ai</code>, filtrado a <code className="text-emerald-400">tenants.slug = 'mia'</code>:</div>
-              <pre className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 text-sm text-emerald-200 overflow-x-auto scrollbar-custom leading-relaxed">{question.sql}</pre>
-            </Panel>
-          )}
-
-          {openPanel === "translation" && question && (
-            <Panel icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>} title="En cristiano" color="amber" onClose={() => setOpenPanel(null)}>
-              {question.concreteExample && (
-                <div className="mb-6 p-6 bg-gradient-to-br from-emerald-500/15 to-emerald-500/5 border-2 border-emerald-500/40 rounded-2xl">
-                  <div className="text-xs font-bold text-emerald-400 tracking-widest mb-3 flex items-center gap-2">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="12" cy="12" r="10"/><polyline points="8 12 11 15 16 9"/></svg>
-                    EJEMPLO CONCRETO
-                  </div>
-                  <p className="text-xl text-white leading-relaxed font-medium">{question.concreteExample}</p>
-                </div>
-              )}
-              <div className="mb-6">
-                <div className="text-xs font-bold text-zinc-400 tracking-widest mb-3">QUÉ SIGNIFICA TODO ESTO</div>
-                <p className="text-lg text-zinc-100 leading-relaxed">{question.translation}</p>
-              </div>
-              {question.designDecision && (
-                <div className="p-5 bg-amber-500/10 border border-amber-500/30 rounded-2xl">
-                  <div className="text-xs font-bold text-amber-400 tracking-widest mb-2">PRÓXIMO PASO DE PRODUCTO</div>
-                  <p className="text-white leading-relaxed">{question.designDecision}</p>
-                </div>
-              )}
-            </Panel>
-          )}
-
-          {openPanel === "visualization" && question && (
-            <Panel
-              icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>}
-              title="Dashboard imaginado"
-              color="emerald"
-              onClose={() => setOpenPanel(null)}
-            >
-              {vizError && (
-                <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-300 mb-4">
-                  <strong>Error:</strong> {vizError}
-                </div>
-              )}
-              {currentVisualization && (
-                <div className="space-y-5">
-                  <div className="p-5 bg-gradient-to-br from-cyan-500/15 to-cyan-500/5 border-2 border-cyan-500/40 rounded-2xl">
-                    <div className="text-xs font-bold text-cyan-300 tracking-widest mb-3">SI LA BD ESTÁ BIEN MODELADA, TENDRÍAS ESTE DASHBOARD</div>
-                    <p className="text-lg text-white leading-relaxed font-medium">{currentVisualization.summary}</p>
-                  </div>
-
-                  {currentVisualization.charts && currentVisualization.charts.length > 0 ? (
-                    <div className="space-y-5">
-                      {currentVisualization.charts.map((chart, i) => (
-                        <div key={i} className="p-5 sm:p-6 bg-zinc-900/60 border border-zinc-800 rounded-2xl">
-                          <div className="flex items-start justify-between mb-4 flex-wrap gap-2">
-                            <div>
-                              <div className="text-xl font-bold text-white leading-tight">{chart.title}</div>
-                              {chart.subtitle && <div className="text-sm text-zinc-500 mt-1">{chart.subtitle}</div>}
-                            </div>
-                            <div className="text-[10px] font-bold tracking-widest text-cyan-300/70 bg-cyan-500/10 border border-cyan-500/20 px-2.5 py-1 rounded-full uppercase">
-                              {chart.chartType.replace("_", " ")}
-                            </div>
-                          </div>
-                          <div className="bg-zinc-950/60 rounded-xl p-3 sm:p-4 border border-zinc-800/60">
-                            <MiniChart chart={chart} />
-                          </div>
-                          {chart.insight && (
-                            <div className="mt-4 p-3 bg-cyan-500/10 border-l-4 border-cyan-500/60 rounded-r-lg">
-                              <div className="text-[10px] font-bold text-cyan-300 tracking-widest mb-1">INSIGHT ACCIONABLE</div>
-                              <p className="text-sm text-zinc-100 leading-relaxed">{chart.insight}</p>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  ) : !vizError && (
-                    <div className="p-5 bg-zinc-900 border border-zinc-800 rounded-2xl text-zinc-400">
-                      No se generaron gráficos para esta pregunta.
-                    </div>
-                  )}
-
-                  <div className="p-4 bg-amber-500/5 border border-amber-500/20 rounded-xl text-xs text-zinc-400">
-                    <strong className="text-amber-300">Nota:</strong> los datos son MOCK realistas generados por Claude. El dashboard real requiere que la BD del cliente persista las features según la decisión arquitectónica del botón "¿Guardar o calcular?".
-                  </div>
-                </div>
-              )}
-            </Panel>
-          )}
-
-          {openPanel === "architecture" && question && (
-            <Panel
-              icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>}
-              title="¿Guardar o calcular? + lente ML"
-              color="emerald"
-              onClose={() => setOpenPanel(null)}
-            >
-              {archError && (
-                <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-300 mb-4">
-                  <strong>Error:</strong> {archError}
-                </div>
-              )}
-              {currentArchitecture && (
-                <div className="space-y-5">
-                  <div className="p-5 bg-gradient-to-br from-violet-500/15 to-violet-500/5 border-2 border-violet-500/40 rounded-2xl">
-                    <div className="text-xs font-bold text-violet-300 tracking-widest mb-3">DECISIÓN ARQUITECTÓNICA CLAVE</div>
-                    <p className="text-lg text-white leading-relaxed font-medium">{currentArchitecture.summary}</p>
-                  </div>
-
-                  {currentArchitecture.items && currentArchitecture.items.length > 0 ? (
-                    <div className="space-y-4">
-                      {currentArchitecture.items.map((item, i) => {
-                        const recMap = {
-                          runtime:     { label: "CALCULAR RUNTIME",        bg: "bg-sky-500/15",     border: "border-sky-500/40",     text: "text-sky-300",     subtitle: "Sin persistir — backend lo calcula al vuelo" },
-                          materialize: { label: "MATERIALIZAR",             bg: "bg-emerald-500/15", border: "border-emerald-500/40", text: "text-emerald-300", subtitle: "Columna o tabla con valor actual persistido" },
-                          snapshot:    { label: "SNAPSHOT HISTÓRICO",       bg: "bg-amber-500/15",   border: "border-amber-500/40",   text: "text-amber-300",   subtitle: "Append-only con timestamps para historia y ML" },
-                          new_rule:    { label: "REGLA / TRIGGER",          bg: "bg-violet-500/15",  border: "border-violet-500/40",  text: "text-violet-300",  subtitle: "Lógica de negocio en backend (cron/trigger)" },
-                        };
-                        const rec = recMap[item.recommendation] || recMap.materialize;
-                        const mlMap = {
-                          critical: { label: "ML: CRÍTICO", color: "bg-red-500/20 text-red-300 border-red-500/40" },
-                          useful:   { label: "ML: ÚTIL",     color: "bg-amber-500/20 text-amber-300 border-amber-500/40" },
-                          low:      { label: "ML: BAJO",     color: "bg-zinc-700/50 text-zinc-400 border-zinc-700" },
-                        };
-                        const mlBadge = mlMap[item.mlRelevance] || mlMap.low;
-                        return (
-                          <div key={i} className={`p-5 ${rec.bg} border ${rec.border} rounded-2xl`}>
-                            <div className="flex items-center gap-3 mb-3 flex-wrap">
-                              <code className={`${rec.text} font-bold text-base`}>{item.entityId}</code>
-                              <div className={`px-3 py-1 rounded-full text-xs font-bold tracking-widest ${rec.text} ${rec.bg} border ${rec.border}`}>
-                                → {rec.label}
-                              </div>
-                              <div className={`px-2.5 py-1 rounded-full text-[10px] font-bold tracking-widest border ${mlBadge.color}`}>
-                                {mlBadge.label}
-                              </div>
-                            </div>
-                            <div className={`text-xs ${rec.text} opacity-70 mb-2 italic`}>{rec.subtitle}</div>
-                            <p className="text-white leading-relaxed mb-3">{item.reasoning}</p>
-                            {item.mlContext && item.mlRelevance !== "low" && (
-                              <div className="mt-3 p-3 bg-zinc-950/40 border border-zinc-800 rounded-xl">
-                                <div className="text-[10px] font-bold text-zinc-500 tracking-widest mb-1">QUÉ MODELO SE BENEFICIA</div>
-                                <p className="text-sm text-zinc-200 leading-relaxed">{item.mlContext}</p>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="p-5 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl">
-                      <div className="text-xs font-bold text-emerald-400 tracking-widest mb-2">SIN DECISIONES PENDIENTES</div>
-                      <p className="text-white leading-relaxed">Esta pregunta no tiene gaps arquitectónicos. Las tablas involucradas ya están materializadas correctamente. El próximo paso natural está en el resumen de arriba.</p>
-                    </div>
-                  )}
-                </div>
-              )}
-            </Panel>
-          )}
-
-          {openPanel === "gaps" && question && (
-            <Panel icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>} title="¿Qué falta? — Roadmap" color="red" onClose={() => setOpenPanel(null)}>
-              <div className="space-y-4">
-                {question.entities.filter(e => e.status === "design").map(e => (
-                  <div key={e.id} className="p-5 bg-amber-500/10 border border-amber-500/30 rounded-2xl">
-                    <div className="flex items-center gap-3 mb-2">
-                      <StatusBadge status="design" />
-                      <code className="text-amber-300 font-bold">{e.label}</code>
-                    </div>
-                    <div className="text-white text-lg font-semibold mb-1">{e.subtitle}</div>
-                    <div className="text-zinc-400 text-sm">Existe la tabla, pero el dato vive en un formato que no permite analítica directa. Es decisión de producto, no falla.</div>
-                  </div>
-                ))}
-                {question.entities.filter(e => e.status === "missing").map(e => (
-                  <div key={e.id} className="p-5 bg-red-500/10 border border-red-500/30 border-dashed rounded-2xl">
-                    <div className="flex items-center gap-3 mb-2">
-                      <StatusBadge status="missing" />
-                      <code className="text-red-300 font-bold">{e.label}</code>
-                    </div>
-                    <div className="text-white text-lg font-semibold mb-2">{e.subtitle}</div>
-                    <div className="text-zinc-300 text-sm mb-3">Estructura propuesta:</div>
-                    <ul className="space-y-1">
-                      {e.columns.map((c, i) => <li key={i} className="text-xs text-zinc-300 font-mono">• {c}</li>)}
-                    </ul>
-                  </div>
-                ))}
-                {question.designDecision && (
-                  <div className="p-5 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl">
-                    <div className="text-xs font-bold text-emerald-400 tracking-widest mb-2">DECISIÓN A TOMAR CON EL CLIENTE</div>
-                    <p className="text-white leading-relaxed">{question.designDecision}</p>
-                  </div>
-                )}
-              </div>
-            </Panel>
-          )}
-
+          <PanelManager
+            openPanel={openPanel}
+            onClose={() => setOpenPanel(null)}
+            question={question}
+            currentArchitecture={currentArchitecture}
+            currentVisualization={currentVisualization}
+            archError={archError}
+            vizError={vizError}
+          />
           {showKeyModal && (
             <ApiKeyModal
               initialKey={apiKey}

@@ -99,12 +99,97 @@ Prompt caching activo en el system prompt para amortizar costo en sesiones de va
 
 ---
 
+## Decisiones técnicas conscientes (trade-offs)
+
+Este proyecto es deliberadamente un **single-file HTML sin build step**. Eso impone trade-offs que merecen estar documentados:
+
+### Tailwind Play CDN
+
+Se usa `cdn.tailwindcss.com` (Play CDN), que es un compilador JIT en el browser. Tailwind oficialmente recomienda no usarlo en producción porque añade latencia inicial (~500ms para compilar CSS al cargar). Acá se usa porque la alternativa rompe el "single file" — requeriría un build step con Tailwind CLI + un `output.css` aparte. Para taller didáctico y demos, esta latencia es aceptable. Si quieres producción real, reemplaza el script por Tailwind compilado.
+
+### Dependencias CDN con SRI
+
+React 18.3.1, ReactDOM 18.3.1 y Babel Standalone 7.26.4 están pineadas a versiones específicas con hashes **SRI (Subresource Integrity, sha384)**. Si alguien compromete unpkg.com, el browser detecta que el contenido no coincide con el hash y NO ejecuta el script. Protege contra supply-chain attacks típicos.
+
+Tailwind Play CDN NO tiene SRI porque su contenido cambia dinámicamente — es un compromiso explícito.
+
+### Browser-direct a la Anthropic API
+
+Las 4 capas de análisis (pregunta, schema, arquitectura, visualización) llaman a `https://api.anthropic.com/v1/messages` directamente desde el browser usando el header oficial `anthropic-dangerous-direct-browser-access: true`. Esto evita necesitar un backend proxy. El trade-off: tu API key vive en el browser. Acceptable para uso personal/taller. Para producción multi-usuario hay que proxiar via backend.
+
+### App como single component
+
+El componente `App` tiene ~580 líneas. En un proyecto convencional esto se rompería en sub-componentes (`LandingScreen`, `QuestionScreen`, `PanelManager`). Acá se mantiene monolítico porque el archivo entero es 1 solo HTML — sub-componentes no aportan modularidad real cuando ya estás en un solo archivo. Si haces fork con build pipeline, separar es trivial.
+
+### Babel Standalone en el browser
+
+JSX se transpila en el browser al cargar la página (~200ms extra en la primera carga). En cualquier proyecto serio, eso debería ser un build step offline. Acá se acepta el costo para mantener el "doble click y abre" como UX de instalación.
+
+---
+
+## Historia de auditoría
+
+Este código fue auditado contra patrones típicos de vibe-coding (45% del código generado por IA tiene vulnerabilidades, según datos 2025-2026). Fixes aplicados:
+
+- ✓ **Race condition** en `setTimeout` del reveal animation — ahora con `useRef([])` + cleanup en `reset()` y `useEffect` de unmount
+- ✓ **Duplicación de fetch a Claude** — extraído helper único `callClaudeJSON` reutilizado por las 4 capas (eliminó ~80 líneas duplicadas)
+- ✓ **SRI hashes** en dependencias CDN — pineadas a versión específica con sha384
+- ✓ **Magic numbers** (`1400`/`2900`/`4200` del reveal) — extraídos a constante `REVEAL_TIMING_MS`
+- ✓ **Cero secrets hardcodeados** verificado con grep
+- ✓ **Cero XSS** verificado (sin innerHTML, eval, ni dangerouslySetInnerHTML)
+- ✓ **Cero console.log de debug** verificado
+- ✓ **Cleanup de event listeners** validado en `useViewport` y `ConnectionsSVG`
+
+---
+
 ## Privacidad y seguridad
 
-- La API key vive **solo en tu navegador** (`localStorage` + opcionalmente `local-config.js` local)
-- **Nunca** se manda a ningún servidor que no sea Anthropic
-- Las preguntas que escribes SÍ viajan a Anthropic — si son sensibles, considéralo
-- El esquema que cargues a "Mi BD" se manda a Anthropic para procesarlo. Si tu schema es confidencial, NO subas la versión con datos reales — usa una versión anonimizada
+### Dónde vive tu API key
+
+- En `localStorage["claude_api_key"]` del navegador donde abras el `index.html`
+- Opcionalmente en `local-config.js` (gitignored — nunca se sube al repo)
+- **Nunca** se manda a ningún servidor que NO sea `api.anthropic.com`
+
+### Qué viaja a Anthropic
+
+| Acción | Qué se envía |
+|--------|--------------|
+| Click pregunta pre-cargada | Nada nuevo — todo es local |
+| Escribir pregunta libre + Analizar | El texto de tu pregunta + el system prompt con schema (zona-ai o tu BD custom procesada) |
+| "Mi BD" → procesar DDL/descripción/imagen | El contenido pegado/subido tal cual, sin filtros |
+| Click "¿Guardar o calcular?" sobre una pregunta libre | Las entidades + el texto de la pregunta |
+| Click "Dashboard imaginado" sobre una pregunta libre | Las entidades + el texto de la pregunta |
+
+**Regla de oro**: si lo pegaste en la app, asume que llegó a Anthropic.
+
+### Protecciones de defensa en profundidad
+
+- **Content-Security-Policy** estricta en el `<meta>` del HTML — limita `connect-src` a `api.anthropic.com`, `unpkg.com` (sourcemaps Babel), Google Fonts y `'self'`. Aunque hubiera XSS futuro en un fork, la key NO podría exfiltrarse a un dominio externo
+- **SRI sha384** en las 3 dependencias críticas (React, ReactDOM, Babel) — si unpkg.com es comprometido, el browser no ejecuta el script
+- **Sin innerHTML/dangerouslySetInnerHTML/eval** en código de la app (Babel usa eval para transpile JSX, ese es trade-off conocido del approach single-file)
+- **Click-jacking** queda como gap conocido: el browser ignora `frame-ancestors` cuando viene via `<meta>` (solo lo respeta como HTTP header). Si servís la app desde nginx/Caddy/etc, agregá `X-Frame-Options: DENY`. En GitHub Pages no se puede setear headers, pero el riesgo es bajo porque la app no tiene login ni transacciones que un click-jack pueda explotar
+
+### Si comiteás `local-config.js` por accidente
+
+1. **Revoca la key INMEDIATAMENTE** en https://console.anthropic.com/settings/keys
+2. Crea una nueva key y pégala en tu nuevo `local-config.js`
+3. NO basta con borrar el archivo y volver a commitear — la key queda en `git log`. Si el push ya salió a GitHub, también borra el repo o reescribe la historia con `git filter-repo`
+4. Verifica los logs de uso de la key vieja en console.anthropic.com para detectar abuso
+
+### Cosas que NO aplican a este proyecto
+
+Porque NO hay backend:
+- ❌ SQL injection · ❌ Path traversal · ❌ CSRF · ❌ Mass assignment · ❌ Auth bypass
+
+### Si vas a usar esta app para data sensible
+
+NO es el caso de uso correcto. Esta app está diseñada para taller didáctico y exploración de schemas no confidenciales. Para producción con data real necesitarías:
+
+- Backend propio que proxie a Anthropic (la key vive server-side)
+- Auth de usuarios
+- Anonimización automática del input antes de enviar
+- Rate limiting per-user
+- Audit log de qué se envió y cuándo
 
 ---
 
